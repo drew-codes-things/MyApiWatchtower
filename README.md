@@ -26,7 +26,7 @@ The results page is public and unauthenticated, so anyone can see current status
 | Jikan API | MediaSuggest | - |
 | MediaSuggest TMDB Worker | MediaSuggest | - |
 | Spotify (Client Credentials) | SpotifyInfoExtract | `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` |
-| Spotify (User OAuth) | SpotifyDashTool, DrewsMusicBot | Connect Spotify (see below) |
+| Spotify (User OAuth) | SpotifyDashTool, DrewsMusicBot | one-time login on first `python app.py` (see below) |
 | Last.fm API | SpotifyDashTool | `LASTFM_API_KEY` |
 | Discord Bot Token (DrewBot) | DrewBot | `DREWBOT_DISCORD_TOKEN` |
 | Discord Bot Token (DrewsMusicBot) | DrewsMusicBot | `DREWSMUSICBOT_DISCORD_TOKEN` |
@@ -54,11 +54,11 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Fill in whichever keys you want checked - `TMDB_API_KEY`, `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET`, `LASTFM_API_KEY`, `DREWBOT_DISCORD_TOKEN`, `DREWSMUSICBOT_DISCORD_TOKEN`, `PLEX_TOKEN`/`PLEX_SERVER_NAME`. Set `WEB_USERNAME`/`WEB_PASSWORD` to gate the Run checks button and the Spotify connect flow behind HTTP Basic Auth (recommended, since it triggers live calls with real secrets).
+Fill in whichever keys you want checked - `TMDB_API_KEY`, `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET`, `LASTFM_API_KEY`, `DREWBOT_DISCORD_TOKEN`, `DREWSMUSICBOT_DISCORD_TOKEN`, `PLEX_TOKEN`/`PLEX_SERVER_NAME`. Set `WEB_USERNAME`/`WEB_PASSWORD` to gate the Run checks button behind HTTP Basic Auth (recommended, since it triggers live calls with real secrets).
 
 ### 2. Spotify
 
-The User OAuth check reuses the same Spotify Developer app already used by `SpotifyDashTool`/`DrewsMusicBot`. In that app's [dashboard](https://developer.spotify.com/dashboard), add a new Redirect URI matching where this app runs, e.g. `http://127.0.0.1:5002/spotify/callback` (or set `SPOTIFY_REDIRECT_URI` in `.env` to override it). Start the app, click **Connect Spotify** once, and the resulting token is cached to `.spotifyoauthcache` (gitignored) and reused on future runs.
+The User OAuth check reuses the same Spotify Developer app already used by `SpotifyDashTool`/`DrewsMusicBot`. In that app's [dashboard](https://developer.spotify.com/dashboard), add a new Redirect URI matching wherever this app runs: `http://127.0.0.1:5002/callback` (or whatever port you set `PORT` to in `.env`, if you'd rather not use the default 5002). The callback has to land on this same port since that's the only one the app is actually listening on.
 
 The scopes requested are read-only (`playlist-read-private`, `playlist-read-collaborative`, `user-read-private`, `user-library-read`) - this only verifies the auth flow and those reads still work, it never modifies your account, even though `SpotifyDashTool` itself has write scopes.
 
@@ -68,7 +68,9 @@ The scopes requested are read-only (`playlist-read-private`, `playlist-read-coll
 python app.py
 ```
 
-Open `http://127.0.0.1:5002`, click **Run checks**.
+If Spotify keys are set and you haven't connected an account yet, an authorize link is printed to this terminal on startup and opened in your default browser automatically (if one's available on this machine). Log in, and the browser redirects back into the running app's own `/callback` route to finish the exchange - no separate step needed. The resulting token is cached to `.spotifyoauthcache` (gitignored) and reused on future runs, so this only happens again if that token is later revoked from your Spotify account settings.
+
+Open `http://127.0.0.1:5002`, click **Run checks**. A progress bar tracks how many of the checks have finished; the page reloads with results once it's done.
 
 ---
 
@@ -76,13 +78,4 @@ Open `http://127.0.0.1:5002`, click **Run checks**.
 
 Results persist to `results.json` (gitignored) so the dashboard has something to show between runs instead of resetting on restart. Each row shows the check's current status (ok / fail / not configured / never run), a short message, response latency, and which of the catalogue's projects depend on it - so if Plex breaks, it's immediately clear that's three projects affected, not one.
 
----
-
-## Running the tests
-
-```bash
-pip install -r requirements-dev.txt
-pytest
-```
-
-Only the non-network logic (the check registry's shape, and results persistence) is unit tested. The checks themselves are exercised for real by clicking Run checks, the same way this user's other self-hosted tools rely on the manual verification checklist in their own READMEs rather than mocking live third-party APIs.
+Failure messages are scrubbed of any secret value before they're saved or shown, since this page is public - a network error that would otherwise echo back a raw request URL (which some of these APIs put the key/token in) gets redacted first.

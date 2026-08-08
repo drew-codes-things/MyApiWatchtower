@@ -2,7 +2,7 @@ import os
 
 import requests
 
-from checks.result import fail, not_configured, ok, timed
+from checks.result import fail, not_configured, ok, redact, timed
 
 TMDB_CONFIGURATION_URL = "https://api.themoviedb.org/3/configuration"
 
@@ -16,7 +16,7 @@ def run():
         try:
             response = requests.get(TMDB_CONFIGURATION_URL, params={"api_key": api_key}, timeout=10)
         except requests.RequestException as error:
-            return fail(f"Request failed: {error}")
+            return fail(redact(f"Request failed: {error}", api_key))
         if response.status_code == 200:
             return ok("TMDB accepted the key and returned its configuration")
         if response.status_code == 401:

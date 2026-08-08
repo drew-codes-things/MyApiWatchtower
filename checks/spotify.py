@@ -3,7 +3,7 @@ import os
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials, SpotifyOAuth
 
-from checks.result import fail, not_configured, ok, timed
+from checks.result import fail, not_configured, ok, redact, timed
 
 USER_OAUTH_SCOPES = "playlist-read-private playlist-read-collaborative user-read-private user-library-read"
 CACHE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".spotifyoauthcache")
@@ -17,11 +17,8 @@ def _client_id_and_secret():
 
 
 def redirect_uri():
-    override = os.environ.get("SPOTIFY_REDIRECT_URI", "").strip()
-    if override:
-        return override
     port = os.environ.get("PORT", "5002").strip() or "5002"
-    return f"http://127.0.0.1:{port}/spotify/callback"
+    return f"http://127.0.0.1:{port}/callback"
 
 
 def run_client_credentials():
@@ -35,7 +32,7 @@ def run_client_credentials():
             client = spotipy.Spotify(auth_manager=auth_manager)
             artist = client.artist(KNOWN_ARTIST_ID)
         except Exception as error:
-            return fail(f"Client Credentials request failed: {error}")
+            return fail(redact(f"Client Credentials request failed: {error}", client_secret, client_id))
         if not artist or "name" not in artist:
             return fail("Spotify returned a response with an unexpected shape")
         return ok(f"Client Credentials auth works (fetched '{artist['name']}')")
@@ -69,7 +66,7 @@ def run_user_oauth():
     if not client_id or not client_secret:
         return not_configured("SPOTIFY_CLIENT_ID/SPOTIFY_CLIENT_SECRET are not set")
     if not is_user_connected():
-        return not_configured("Not connected yet, use the Connect Spotify button first")
+        return not_configured("Not connected yet, check the terminal app.py was started from for the authorize link")
 
     def do_check():
         try:
@@ -78,7 +75,7 @@ def run_user_oauth():
             me = client.current_user()
             playlists = client.current_user_playlists(limit=1)
         except Exception as error:
-            return fail(f"User OAuth request failed: {error}")
+            return fail(redact(f"User OAuth request failed: {error}", client_secret, client_id))
         if not me or "id" not in me:
             return fail("Spotify returned a response with an unexpected shape")
         playlist_count = playlists.get("total", "?") if isinstance(playlists, dict) else "?"

@@ -2,7 +2,7 @@ import os
 
 import requests
 
-from checks.result import fail, not_configured, ok, timed
+from checks.result import fail, not_configured, ok, redact, timed
 
 DISCORD_ME_URL = "https://discord.com/api/v10/users/@me"
 
@@ -17,7 +17,7 @@ def run(env_var):
         try:
             response = requests.get(DISCORD_ME_URL, headers=headers, timeout=10)
         except requests.RequestException as error:
-            return fail(f"Request failed: {error}")
+            return fail(redact(f"Request failed: {error}", token))
         if response.status_code == 200:
             body = response.json()
             return ok(f"Discord accepted the token (bot: {body.get('username', 'unknown')})")

@@ -2,7 +2,7 @@ import requests
 
 from checks.result import fail, ok, timed
 
-YTS_LIST_MOVIES_URL = "https://yts.mx/api/v2/list_movies.json"
+YTS_LIST_MOVIES_URL = "https://movies-api.accel.li/api/v2/list_movies.json"
 
 
 def run():

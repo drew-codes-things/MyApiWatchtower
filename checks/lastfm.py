@@ -2,7 +2,7 @@ import os
 
 import requests
 
-from checks.result import fail, not_configured, ok, timed
+from checks.result import fail, not_configured, ok, redact, timed
 
 LASTFM_API_URL = "http://ws.audioscrobbler.com/2.0/"
 
@@ -17,7 +17,7 @@ def run():
         try:
             response = requests.get(LASTFM_API_URL, params=params, timeout=10)
         except requests.RequestException as error:
-            return fail(f"Request failed: {error}")
+            return fail(redact(f"Request failed: {error}", api_key))
         if response.status_code != 200:
             return fail(f"Last.fm returned unexpected status {response.status_code}")
         body = response.json()

@@ -29,3 +29,11 @@ def timed(fn):
     elapsed_ms = round((time.monotonic() - start) * 1000)
     result.latency_ms = elapsed_ms
     return result
+
+
+def redact(text, *secrets):
+    redacted = text
+    for secret in secrets:
+        if secret:
+            redacted = redacted.replace(secret, "[REDACTED]")
+    return redacted
