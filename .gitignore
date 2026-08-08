@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+.pytest_cache/
+results.json
+.spotifyoauthcache
+venv/
+.venv/
