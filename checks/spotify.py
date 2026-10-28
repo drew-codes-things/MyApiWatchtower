@@ -2,14 +2,13 @@ import os
 
 from spotipy.oauth2 import SpotifyClientCredentials, SpotifyOAuth
 
-from checks.probe import Probe, StepFailure, StepWarning, get_json, http, non_empty_list, require_fields
+from checks.probe import Probe, StepFailure, get_json, non_empty_list, require_fields
 from checks.result import not_configured, timed
 
 USER_OAUTH_SCOPES = "playlist-read-private playlist-read-collaborative user-read-private user-library-read"
 CACHE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".spotifyoauthcache")
 KNOWN_ARTIST_ID = "0TnOYISbd1XYRBk9myaseg"
 SPOTIFY_API = "https://api.spotify.com/v1"
-MARKET = "GB"
 CATALOGUE_PAGE_SIZE = 10
 
 
@@ -53,11 +52,7 @@ def run_client_credentials():
 
         def artist():
             body = state["get"](f"/artists/{KNOWN_ARTIST_ID}")
-            require_fields(body, "name", "images")
-            dropped = [name for name in ("genres", "followers", "popularity") if name not in body]
-            if dropped:
-                raise StepWarning(f"'{body['name']}' came back without {', '.join(dropped)} - SpotifyInfoExtract "
-                                  "shows N/A for those")
+            require_fields(body, "name", "images", "external_urls.spotify")
             return f"'{body['name']}'"
 
         def artist_albums():
@@ -73,22 +68,12 @@ def run_client_credentials():
             require_fields(tracks[0], "name", "duration_ms", "track_number")
             return f"'{body['name']}' with {len(tracks)} tracks"
 
-        def top_tracks():
-            response = http("GET", f"{SPOTIFY_API}/artists/{KNOWN_ARTIST_ID}/top-tracks", params={"market": MARKET},
-                            headers={"Authorization": f"Bearer {state['token']}"}, expect=(200, 403))
-            if response.status_code == 403:
-                raise StepWarning("HTTP 403 - Spotify no longer gives this app top tracks; SpotifyInfoExtract "
-                                  "lists the artist without them")
-            tracks = non_empty_list(response.json(), "tracks")
-            return f"{len(tracks)} top tracks"
-
         have_token = probe.step("App token (Client Credentials)", token)
         needs_token = [("an app token", have_token)]
         probe.step("SpotifyInfoExtract search (/search)", search, needs=needs_token)
         probe.step("SpotifyInfoExtract artist (/artists/{id})", artist, needs=needs_token)
         album_id = probe.step("SpotifyInfoExtract albums (/artists/{id}/albums)", artist_albums, needs=needs_token)
         probe.step("SpotifyInfoExtract album (/albums/{id})", lambda: album(album_id), needs=[("an album id", album_id)])
-        probe.step("SpotifyInfoExtract top tracks (/artists/{id}/top-tracks)", top_tracks, needs=needs_token)
         return probe.result()
 
     return timed(do_check)
@@ -171,14 +156,6 @@ def run_user_oauth():
             require_fields(body, "name", "artists[0].name", "album.name", "duration_ms")
             return f"'{body['name']}'"
 
-        def audio_features(track_id):
-            response = http("GET", f"{SPOTIFY_API}/audio-features", params={"ids": track_id},
-                            headers={"Authorization": f"Bearer {state['token']}"}, expect=(200, 403, 404))
-            if response.status_code != 200:
-                raise StepWarning(f"HTTP {response.status_code} - Spotify no longer gives this app audio "
-                                  "features; SpotifyDashTool shows its playlist stats without them")
-            return "available"
-
         have_token = probe.step("Refresh the saved login", refresh)
         needs_token = [("a user token", have_token)]
         probe.step("Profile (/me)", me, needs=needs_token)
@@ -186,8 +163,6 @@ def run_user_oauth():
         track_id = probe.step("DrewsMusicBot playlist read (/playlists/{id}/items)",
                               lambda: playlist_items(playlist_id), needs=[("a playlist", playlist_id)])
         probe.step("SpotifyDashTool track (/tracks/{id})", lambda: track(track_id), needs=[("a track", track_id)])
-        probe.step("SpotifyDashTool audio features (/audio-features)", lambda: audio_features(track_id),
-                   needs=[("a track", track_id)])
         return probe.result()
 
     return timed(do_check)

@@ -16,7 +16,7 @@
 
 One click (or the automatic daily run) checks every third-party API that at least one other project in the catalogue depends on - TMDB, AniList, Spotify (both the Client Credentials and User OAuth paths), Last.fm, the Discord bots, RedditDownloaderV4's Discord relay, Plex (via plex.tv), and YTS - plus the websites that projects scrape instead of calling a documented API.
 
-Each check is a series of steps that copy what the dependent projects actually do: the same endpoints, parameters and headers, then the exact response fields their code reads. So a result doesn't just say "TMDB is up", it says which project's request broke and why - for example "DrewBot TV search: field 'first_air_date' is missing", "HTTP 521 (Cloudflare 521 - their origin server is down)", or "YtsSearch release year: the title/year markup changed". Each step passes, warns (it works, but a project has to fall back, like Spotify no longer returning audio features), fails, or is skipped because an earlier step it needed failed.
+Each check is a series of steps that copy what the dependent projects actually do: the same endpoints, parameters and headers, then the exact response fields their code reads. So a result doesn't just say "TMDB is up", it says which project's request broke and why - for example "DrewBot TV search: field 'first_air_date' is missing", "HTTP 521 (Cloudflare 521 - their origin server is down)", or "YtsSearch release year: the title/year markup changed". Each step passes, warns (it works, but a project has to fall back, like a project falling back to a slower path), fails, or is skipped because an earlier step it needed failed.
 
 The results page is public and unauthenticated, so anyone can see current status without needing any credentials. Triggering a real run is the only thing gated behind login, since it makes live calls with real secrets.
 
@@ -27,8 +27,8 @@ The results page is public and unauthenticated, so anyone can see current status
 | TMDB API | DrewBot, TmdbBackdropDL | configuration, `/search/movie` and `/search/tv` with the fields DrewBot's embed shows, `/search/multi`, `/movie/{id}/images`, and downloading an original-size backdrop | `TMDB_API_KEY` |
 | AniList API | YtsPlexRss | the anime filter's GraphQL search: a known anime film still matches as an anime movie of the right year, and a live-action film doesn't (Jikan went down in October 2026) | - |
 | MediaSuggest TMDB Worker | MediaSuggest | movie, movie-with-genre, TV and anime picks, including that anime picks really are Japanese animation | - |
-| Spotify (Client Credentials) | SpotifyInfoExtract | app token, search, artist, albums, album tracks, top tracks | `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` |
-| Spotify (User OAuth) | SpotifyDashTool, DrewsMusicBot | refreshing the saved login, `/me`, playlist entry counts, DrewsMusicBot's `/playlists/{id}/items` read, `/tracks/{id}`, audio features | one-time login on first `python app.py` (see below) |
+| Spotify (Client Credentials) | SpotifyInfoExtract | app token, search, artist, albums, album tracks | `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` |
+| Spotify (User OAuth) | SpotifyDashTool, DrewsMusicBot | refreshing the saved login, `/me`, playlist entry counts, DrewsMusicBot's `/playlists/{id}/items` read, `/tracks/{id}` | one-time login on first `python app.py` (see below) |
 | Last.fm API | SpotifyDashTool | `track.getInfo` tags and the `artist.getTopTags` fallback | `LASTFM_API_KEY` |
 | Discord Bot Token (DrewBot / DrewsMusicBot) | DrewBot, DrewsMusicBot | the token, and gateway logins left (a reconnect loop shows up here) | `DREWBOT_DISCORD_TOKEN`, `DREWSMUSICBOT_DISCORD_TOKEN` |
 | Discord relay (RedditDownloaderV4) | RedditDownloaderV4 | the Devvit app's webhook posts into the channel discord-poller reads, the poller bot's token and Message Content Intent, and reading `RELAY:` messages | `REDDITV4_WEBHOOK_URL`, `REDDITV4_BOT_TOKEN`, `REDDITV4_CHANNEL_ID` |
