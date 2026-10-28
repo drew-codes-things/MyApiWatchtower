@@ -6,7 +6,6 @@ from plexapi.myplex import MyPlexAccount
 from checks.probe import Probe, StepFailure
 from checks.result import not_configured, timed
 
-# Libraries other projects open by name; a rename in Plex breaks them silently.
 DEFAULT_LIBRARIES = "Movies,Anime Shows,Anime Shows - High"
 
 
@@ -47,8 +46,6 @@ def run():
             return f"{section.type} library with {section.totalSize} items"
 
         def item_metadata():
-            # PlexDiscordPresence fetches each playing item by ratingKey and reads these fields.
-            # (It can't list sessions: shared accounts are forbidden from /status/sessions.)
             sample = state["sample_section"].search(maxresults=1)
             if not sample:
                 raise StepFailure("the library returned no items to look up")

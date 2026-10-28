@@ -1,5 +1,5 @@
+import checks.anilist as anilist_check
 import checks.discord as discord_check
-import checks.jikan as jikan_check
 import checks.lastfm as lastfm_check
 import checks.mediasuggest_worker as mediasuggest_worker_check
 import checks.plex as plex_check
@@ -17,11 +17,11 @@ CHECKS = [
         "run": tmdb_check.run,
     },
     {
-        "id": "jikan",
-        "label": "Jikan API",
+        "id": "anilist",
+        "label": "AniList API",
         "projects": ["YtsPlexRss"],
         "kind": "api",
-        "run": jikan_check.run,
+        "run": anilist_check.run,
     },
     {
         "id": "mediasuggest_worker",

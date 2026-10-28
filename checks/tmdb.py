@@ -5,7 +5,7 @@ from checks.result import not_configured, timed
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p"
-KNOWN_MOVIE_ID = 27205  # Inception: long-lived, with plenty of backdrops
+KNOWN_MOVIE_ID = 27205
 
 
 def run():
@@ -22,14 +22,12 @@ def run():
         return "key accepted, image configuration present"
 
     def drewbot_search(media_type, query, title_field, date_field):
-        # DrewBot's /search command: /search/{movie|tv}, then the fields its embed shows.
         body = tmdb(f"/search/{media_type}", query=query, language="en-US", page=1)
         results = non_empty_list(body, "results")
         require_fields(results[0], title_field, "overview", "vote_average", "poster_path", date_field)
         return f"{len(results)} results, first is '{results[0][title_field]}'"
 
     def backdrop_search():
-        # TmdbBackdropDL: /search/multi, keeping only movie/tv results ranked by vote count.
         body = tmdb("/search/multi", query="Inception", include_adult="false")
         results = [r for r in non_empty_list(body, "results") if r.get("media_type") in ("movie", "tv")]
         if not results:

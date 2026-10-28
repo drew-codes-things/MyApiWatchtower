@@ -7,7 +7,6 @@ POSTER_PREFIX = "https://image.tmdb.org/"
 
 def run():
     def recommendation(media_type, genres="", must_have_genre=None, must_be_language=None):
-        # MediaSuggest's "Recommend me something" button: one random pick, rendered as a card.
         params = {"type": media_type}
         if genres:
             params["genres"] = genres

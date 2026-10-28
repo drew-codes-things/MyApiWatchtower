@@ -1,22 +1,14 @@
-"""Checks for projects that read a website rather than a documented API.
-
-Each one makes the project's own requests, with its own headers, and runs the
-same parsing it relies on, so a markup or endpoint change shows up here instead
-of as an empty download folder.
-"""
 import re
 import xml.etree.ElementTree as ElementTree
 
 from checks.probe import Probe, StepFailure, field, get_json, http, non_empty_list, require_fields
 from checks.result import timed
 
-# RedditMediaDL
 REDDIT_USER_AGENT = "linux:reddit-image-downloader:v1.0 (by /u/drew-gnr)"
 REDDIT_FEED_URL = "https://www.reddit.com/r/pics/.rss"
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 REDDIT_MEDIA_URL = re.compile(r"https?://(?:i|preview)\.redd\.it/[^\"' <>]+")
 
-# MangaDL
 ATSU_BASE = "https://atsu.moe"
 ATSU_CDN = "https://cdn.atsu.moe"
 ATSU_SITEMAP = f"{ATSU_BASE}/sitemap-manga.xml"
@@ -26,7 +18,6 @@ ATSU_HEADERS = {
     "Referer": f"{ATSU_BASE}/",
 }
 
-# YtsSearch
 DVD_HOME_URL = "https://www.dvdsreleasedates.com/"
 DVD_SEARCH_URL = "https://www.dvdsreleasedates.com/search/"
 DVD_USER_AGENT = "Mozilla/5.0"
@@ -81,7 +72,6 @@ def run_atsu():
         return get_json(f"{ATSU_BASE}{path}", params=params, headers=ATSU_HEADERS)
 
     def sample_manga():
-        # Any listed manga will do; the sitemap is the one stable public index of IDs.
         response = http("GET", ATSU_SITEMAP, headers=ATSU_HEADERS)
         match = re.search(r"atsu\.moe/manga/([A-Za-z0-9_-]+)", response.text)
         if not match:
@@ -137,7 +127,6 @@ def run_dvdsreleasedates():
         return http("POST", DVD_SEARCH_URL, data={"searchStr": title}, headers={"User-Agent": DVD_USER_AGENT})
 
     def exact_match():
-        # A unique title redirects straight to its detail page, which YtsSearch then parses.
         response = search("Inception")
         if not DVD_DETAIL_URL.match(response.url):
             raise StepFailure(f"an exact title no longer redirects to a /movies/ page (landed on {response.url})")
@@ -150,8 +139,6 @@ def run_dvdsreleasedates():
         return f"redirected to the detail page, release status '{status.group(1)}'"
 
     def upcoming_title_year():
-        # Films from this year on link their year to /new-movies-YYYY/, which is where YtsSearch
-        # reads the year for a "not out yet" answer; the homepage always lists some.
         home = http("GET", DVD_HOME_URL, headers={"User-Agent": DVD_USER_AGENT})
         link = DVD_MOVIE_LINK.search(home.text)
         if not link:
@@ -163,7 +150,6 @@ def run_dvdsreleasedates():
         return f"parsed '{title_year.group('title')}' ({title_year.group('year')})"
 
     def results_list():
-        # A vague title shows a results list, which YtsSearch scopes before matching links.
         response = search("Batman")
         if DVD_DETAIL_URL.match(response.url):
             raise StepFailure("a vague search jumped to one film, so the results-list parsing can't be tested")

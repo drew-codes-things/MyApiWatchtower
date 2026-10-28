@@ -5,8 +5,8 @@ from checks.result import not_configured, timed
 
 DISCORD_API = "https://discord.com/api/v10"
 LOW_SESSION_STARTS = 50
-MESSAGE_CONTENT_INTENT = 1 << 18          # GATEWAY_MESSAGE_CONTENT
-MESSAGE_CONTENT_INTENT_LIMITED = 1 << 19  # GATEWAY_MESSAGE_CONTENT_LIMITED
+MESSAGE_CONTENT_INTENT = 1 << 18
+MESSAGE_CONTENT_INTENT_LIMITED = 1 << 19
 
 
 def _bot_headers(token):
@@ -14,8 +14,6 @@ def _bot_headers(token):
 
 
 def _bot_steps(probe, token):
-    """The steps every bot needs: a valid token, and room to (re)connect to the gateway.
-    Returns whether the token was accepted."""
     headers = _bot_headers(token)
 
     def identity():
@@ -54,8 +52,6 @@ def run(env_var):
 
 
 def run_reddit_relay():
-    """RedditDownloaderV4's Discord leg: the Devvit app posts RELAY: messages through a
-    webhook, and discord-poller reads them back from the same channel with its bot."""
     webhook_url = os.environ.get("REDDITV4_WEBHOOK_URL", "").strip()
     token = os.environ.get("REDDITV4_BOT_TOKEN", "").strip()
     channel_id = os.environ.get("REDDITV4_CHANNEL_ID", "").strip()
@@ -67,7 +63,6 @@ def run_reddit_relay():
         headers = _bot_headers(token)
 
         def webhook():
-            # A webhook URL carries its own token, so this needs no other auth.
             body = get_json(webhook_url)
             require_fields(body, "channel_id")
             if body["channel_id"] != channel_id:
@@ -84,7 +79,6 @@ def run_reddit_relay():
             return "Message Content Intent is on"
 
         def read_channel():
-            # The poller's exact request: the newest messages in the relay channel.
             messages = get_json(f"{DISCORD_API}/channels/{channel_id}/messages", params={"limit": 20},
                                 headers=headers)
             relay_messages = [m for m in messages if (m.get("content") or "").startswith("RELAY:")]

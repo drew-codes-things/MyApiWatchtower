@@ -88,7 +88,6 @@ def get_run_state():
 
 
 def start_run(trigger):
-    """Start a run unless one is already going. Returns whether this call started it."""
     with _run_lock:
         if _run_state["active"]:
             return False
@@ -141,11 +140,9 @@ def next_daily_run(hour, minute, now):
 
 
 def run_daily_schedule(hour, minute):
-    """Run every check once a day at the configured local time, for as long as the app is up."""
     while True:
         next_run = next_daily_run(hour, minute, datetime.now(SCHEDULE_TIMEZONE))
         _schedule_state["next_run"] = next_run
-        # Sleep in short slices so a clock change or a suspended host can't make it miss the slot.
         while datetime.now(SCHEDULE_TIMEZONE) < next_run:
             time.sleep(min(60, max(1, (next_run - datetime.now(SCHEDULE_TIMEZONE)).total_seconds())))
         if not start_run("scheduled"):

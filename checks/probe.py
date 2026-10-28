@@ -1,10 +1,3 @@
-"""Step-by-step checking, so a result says exactly which request or field broke.
-
-A check runs as a series of named steps that each mirror one thing a dependent
-project really does (an endpoint it calls, a field it reads). A step passes,
-warns (works, but something a project relies on is degraded), fails, or is
-skipped because an earlier step it needed failed.
-"""
 import re
 import time
 
@@ -14,7 +7,6 @@ from checks.result import fail, ok, redact, warn
 
 DEFAULT_TIMEOUT = 15
 
-# Statuses with a known, specific meaning, so a failure reads as a cause, not just a number.
 STATUS_MEANINGS = {
     400: "bad request - the API no longer accepts these parameters",
     401: "unauthorized - the key or token was rejected",
@@ -39,11 +31,11 @@ FIELD_PATH_PART = re.compile(r"([^.\[\]]+)|\[(\d+)\]")
 
 
 class StepFailure(Exception):
-    """The step found something a dependent project cannot work with."""
+    pass
 
 
 class StepWarning(Exception):
-    """The step works, but in a degraded way a dependent project has to fall back from."""
+    pass
 
 
 def describe_status(response):
@@ -75,7 +67,6 @@ def describe_request_error(error):
 
 
 def http(method, url, *, expect=(200,), **kwargs):
-    """Make one request and fail the step with a precise reason unless the status is expected."""
     kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
     try:
         response = requests.request(method, url, **kwargs)
@@ -97,7 +88,6 @@ def get_json(url, **kwargs):
 
 
 def field(data, path):
-    """Read a dotted/indexed path like 'results[0].poster_path', failing the step if any part is missing."""
     current = data
     walked = ""
     for key, index in FIELD_PATH_PART.findall(path):
@@ -116,7 +106,6 @@ def field(data, path):
 
 
 def require_fields(data, *paths):
-    """Fail the step if any of the fields a project reads is missing."""
     for path in paths:
         field(data, path)
 
@@ -134,7 +123,6 @@ class Probe:
         self.secrets = [secret for secret in secrets if secret]
 
     def step(self, name, fn, needs=()):
-        """Run one step. fn returns a detail string or (detail, value); the value is returned for later steps."""
         missing = [label for label, value in needs if value is None]
         if missing:
             self._record(name, "skipped", f"needs {', '.join(missing)} from an earlier step", None)

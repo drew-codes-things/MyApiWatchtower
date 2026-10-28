@@ -14,7 +14,7 @@
 
 ## What it does
 
-One click (or the automatic daily run) checks every third-party API that at least one other project in the catalogue depends on - TMDB, Jikan, Spotify (both the Client Credentials and User OAuth paths), Last.fm, the Discord bots, RedditDownloaderV4's Discord relay, Plex (via plex.tv), and YTS - plus the websites that projects scrape instead of calling a documented API.
+One click (or the automatic daily run) checks every third-party API that at least one other project in the catalogue depends on - TMDB, AniList, Spotify (both the Client Credentials and User OAuth paths), Last.fm, the Discord bots, RedditDownloaderV4's Discord relay, Plex (via plex.tv), and YTS - plus the websites that projects scrape instead of calling a documented API.
 
 Each check is a series of steps that copy what the dependent projects actually do: the same endpoints, parameters and headers, then the exact response fields their code reads. So a result doesn't just say "TMDB is up", it says which project's request broke and why - for example "DrewBot TV search: field 'first_air_date' is missing", "HTTP 521 (Cloudflare 521 - their origin server is down)", or "YtsSearch release year: the title/year markup changed". Each step passes, warns (it works, but a project has to fall back, like Spotify no longer returning audio features), fails, or is skipped because an earlier step it needed failed.
 
@@ -22,12 +22,10 @@ The results page is public and unauthenticated, so anyone can see current status
 
 ## Checks
 
-| Check | Depended on by | Needs |
-|---|---|---|
 | Check | Depended on by | What the steps cover | Needs |
 |---|---|---|---|
 | TMDB API | DrewBot, TmdbBackdropDL | configuration, `/search/movie` and `/search/tv` with the fields DrewBot's embed shows, `/search/multi`, `/movie/{id}/images`, and downloading an original-size backdrop | `TMDB_API_KEY` |
-| Jikan API | YtsPlexRss | the MAL filter's `/anime?q=` lookup, and that a known anime film still matches as a Movie of the right year | - |
+| AniList API | YtsPlexRss | the anime filter's GraphQL search: a known anime film still matches as an anime movie of the right year, and a live-action film doesn't (Jikan went down in October 2026) | - |
 | MediaSuggest TMDB Worker | MediaSuggest | movie, movie-with-genre, TV and anime picks, including that anime picks really are Japanese animation | - |
 | Spotify (Client Credentials) | SpotifyInfoExtract | app token, search, artist, albums, album tracks, top tracks | `SPOTIFY_CLIENT_ID`/`SPOTIFY_CLIENT_SECRET` |
 | Spotify (User OAuth) | SpotifyDashTool, DrewsMusicBot | refreshing the saved login, `/me`, playlist entry counts, DrewsMusicBot's `/playlists/{id}/items` read, `/tracks/{id}`, audio features | one-time login on first `python app.py` (see below) |

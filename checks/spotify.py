@@ -25,7 +25,6 @@ def redirect_uri():
 
 
 def _api(token):
-    """GET a Spotify Web API path with a bearer token, returning parsed JSON."""
     def get(path, **params):
         return get_json(f"{SPOTIFY_API}{path}", params=params, headers={"Authorization": f"Bearer {token}"})
     return get
@@ -46,7 +45,6 @@ def run_client_credentials():
             state["get"] = _api(state["token"])
             return "client credentials exchanged for an app token"
 
-        # SpotifyInfoExtract's lookups, in the order it makes them.
         def search():
             body = state["get"]("/search", q="Pitbull", type="artist", limit=1)
             artists = non_empty_list(body, "artists.items")
@@ -63,7 +61,6 @@ def run_client_credentials():
             return f"'{body['name']}'"
 
         def artist_albums():
-            # SpotifyInfoExtract pages through these 10 at a time, Spotify's maximum for catalogue pages.
             body = state["get"](f"/artists/{KNOWN_ARTIST_ID}/albums", limit=CATALOGUE_PAGE_SIZE)
             albums = non_empty_list(body, "items")
             require_fields(albums[0], "id", "name", "release_date", "total_tracks")
@@ -144,8 +141,6 @@ def run_user_oauth():
             return f"logged in as '{body.get('display_name') or body['id']}'"
 
         def playlists():
-            # SpotifyDashTool's playlist list. Spotify now reports a playlist's entries under
-            # "items" ({href, total}); "tracks" is the old name some responses may still use.
             body = state["get"]("/me/playlists", limit=50)
             playlists_found = [p for p in non_empty_list(body, "items") if p]
             require_fields(playlists_found[0], "id", "name", "owner")
@@ -162,7 +157,6 @@ def run_user_oauth():
             return f"{len(playlists_found)} playlists with entry counts", with_entries["id"]
 
         def playlist_items(playlist_id):
-            # DrewsMusicBot reads playlists through /items, where each entry's track is under "item".
             body = state["get"](f"/playlists/{playlist_id}/items", offset=0, limit=10)
             entries = non_empty_list(body, "items")
             first = next((e for e in entries if e.get("item")), None)
@@ -173,13 +167,11 @@ def run_user_oauth():
             return f"{body['total']} entries, first '{first['item']['name']}'", first["item"]["id"]
 
         def track(track_id):
-            # SpotifyDashTool's /api/tracks/:id proxy.
             body = state["get"](f"/tracks/{track_id}")
             require_fields(body, "name", "artists[0].name", "album.name", "duration_ms")
             return f"'{body['name']}'"
 
         def audio_features(track_id):
-            # SpotifyDashTool shows audio features but treats 403/404 as "none", so losing them degrades it.
             response = http("GET", f"{SPOTIFY_API}/audio-features", params={"ids": track_id},
                             headers={"Authorization": f"Bearer {state['token']}"}, expect=(200, 403, 404))
             if response.status_code != 200:
