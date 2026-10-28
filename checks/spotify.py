@@ -10,6 +10,7 @@ CACHE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 KNOWN_ARTIST_ID = "0TnOYISbd1XYRBk9myaseg"
 SPOTIFY_API = "https://api.spotify.com/v1"
 MARKET = "GB"
+CATALOGUE_PAGE_SIZE = 10
 
 
 def _client_id_and_secret():
@@ -62,7 +63,8 @@ def run_client_credentials():
             return f"'{body['name']}'"
 
         def artist_albums():
-            body = state["get"](f"/artists/{KNOWN_ARTIST_ID}/albums", limit=5, include_groups="album,single")
+            # SpotifyInfoExtract pages through these 10 at a time, Spotify's maximum for catalogue pages.
+            body = state["get"](f"/artists/{KNOWN_ARTIST_ID}/albums", limit=CATALOGUE_PAGE_SIZE)
             albums = non_empty_list(body, "items")
             require_fields(albums[0], "id", "name", "release_date", "total_tracks")
             require_fields(body, "next")
