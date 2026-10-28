@@ -3,7 +3,7 @@ import checks.jikan as jikan_check
 import checks.lastfm as lastfm_check
 import checks.mediasuggest_worker as mediasuggest_worker_check
 import checks.plex as plex_check
-import checks.reachability as reachability_check
+import checks.scrapers as scrapers_check
 import checks.spotify as spotify_check
 import checks.tmdb as tmdb_check
 import checks.yts as yts_check
@@ -19,7 +19,7 @@ CHECKS = [
     {
         "id": "jikan",
         "label": "Jikan API",
-        "projects": ["MediaSuggest"],
+        "projects": ["YtsPlexRss"],
         "kind": "api",
         "run": jikan_check.run,
     },
@@ -66,6 +66,13 @@ CHECKS = [
         "run": lambda: discord_check.run("DREWSMUSICBOT_DISCORD_TOKEN"),
     },
     {
+        "id": "reddit_v4_discord_relay",
+        "label": "Discord relay (RedditDownloaderV4)",
+        "projects": ["RedditDownloaderV4"],
+        "kind": "api",
+        "run": discord_check.run_reddit_relay,
+    },
+    {
         "id": "plex",
         "label": "Plex (via plex.tv)",
         "projects": ["PlexDiscordPresence", "PlexLibraryCompare", "YtsPlexRss"],
@@ -83,22 +90,22 @@ CHECKS = [
         "id": "reddit_rss",
         "label": "Reddit RSS feed",
         "projects": ["RedditMediaDL"],
-        "kind": "reachability",
-        "run": lambda: reachability_check.run("https://www.reddit.com/r/popular/.rss", "Reddit RSS"),
+        "kind": "scraper",
+        "run": scrapers_check.run_reddit_rss,
     },
     {
         "id": "atsu_moe",
         "label": "atsu.moe",
         "projects": ["MangaDL"],
-        "kind": "reachability",
-        "run": lambda: reachability_check.run("https://atsu.moe/", "atsu.moe"),
+        "kind": "scraper",
+        "run": scrapers_check.run_atsu,
     },
     {
         "id": "dvdsreleasedates",
         "label": "dvdsreleasedates.com",
         "projects": ["YtsSearch"],
-        "kind": "reachability",
-        "run": lambda: reachability_check.run("https://www.dvdsreleasedates.com/", "dvdsreleasedates.com"),
+        "kind": "scraper",
+        "run": scrapers_check.run_dvdsreleasedates,
     },
 ]
 

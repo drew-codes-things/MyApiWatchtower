@@ -2,21 +2,31 @@ import time
 
 
 class CheckResult:
-    def __init__(self, status, message, latency_ms=None):
+    def __init__(self, status, message, latency_ms=None, steps=None):
         self.status = status
         self.message = message
         self.latency_ms = latency_ms
+        self.steps = steps or []
 
     def to_dict(self):
-        return {"status": self.status, "message": self.message, "latency_ms": self.latency_ms}
+        return {
+            "status": self.status,
+            "message": self.message,
+            "latency_ms": self.latency_ms,
+            "steps": self.steps,
+        }
 
 
-def ok(message, latency_ms=None):
-    return CheckResult("ok", message, latency_ms)
+def ok(message, latency_ms=None, steps=None):
+    return CheckResult("ok", message, latency_ms, steps)
 
 
-def fail(message, latency_ms=None):
-    return CheckResult("fail", message, latency_ms)
+def warn(message, latency_ms=None, steps=None):
+    return CheckResult("warn", message, latency_ms, steps)
+
+
+def fail(message, latency_ms=None, steps=None):
+    return CheckResult("fail", message, latency_ms, steps)
 
 
 def not_configured(message):

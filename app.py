@@ -1,10 +1,12 @@
 import os
 import secrets
 import threading
+import time
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template_string, request, session
@@ -24,9 +26,12 @@ app.config["SESSION_COOKIE_SECURE"] = (os.getenv("SESSION_COOKIE_SECURE") or "fa
 
 WEB_USERNAME = (os.getenv("WEB_USERNAME") or "").strip()
 WEB_PASSWORD = (os.getenv("WEB_PASSWORD") or "").strip()
+DAILY_RUN_AT = (os.getenv("DAILY_RUN_AT") or "").strip()
+SCHEDULE_TIMEZONE = ZoneInfo((os.getenv("SCHEDULE_TIMEZONE") or "Europe/London").strip())
 
 _run_lock = threading.Lock()
 _run_state = {"active": False, "completed": 0, "total": len(CHECKS)}
+_schedule_state = {"next_run": None}
 
 
 def auth_enabled():
@@ -82,12 +87,19 @@ def get_run_state():
         return dict(_run_state)
 
 
-def run_all_checks_in_background():
+def start_run(trigger):
+    """Start a run unless one is already going. Returns whether this call started it."""
     with _run_lock:
+        if _run_state["active"]:
+            return False
         _run_state["active"] = True
         _run_state["completed"] = 0
         _run_state["total"] = len(CHECKS)
+    threading.Thread(target=run_all_checks_in_background, args=(trigger,), daemon=True).start()
+    return True
 
+
+def run_all_checks_in_background(trigger):
     results = {}
     with ThreadPoolExecutor(max_workers=8) as executor:
         future_to_id = {executor.submit(check["run"]): check["id"] for check in CHECKS}
@@ -102,10 +114,51 @@ def run_all_checks_in_background():
                 _run_state["completed"] += 1
 
     checked_at = datetime.now(timezone.utc).isoformat()
-    save_results(checked_at, results)
+    try:
+        save_results(checked_at, results, trigger)
+    finally:
+        with _run_lock:
+            _run_state["active"] = False
+    print(f"Checks finished ({trigger}): " + ", ".join(
+        f"{check_id}={result['status']}" for check_id, result in sorted(results.items())), flush=True)
 
-    with _run_lock:
-        _run_state["active"] = False
+
+def parse_daily_time(value):
+    try:
+        hour, minute = (int(part) for part in value.split(":"))
+    except ValueError as error:
+        raise ValueError(f"DAILY_RUN_AT must look like HH:MM, got {value!r}") from error
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        raise ValueError(f"DAILY_RUN_AT is out of range: {value!r}")
+    return hour, minute
+
+
+def next_daily_run(hour, minute, now):
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def run_daily_schedule(hour, minute):
+    """Run every check once a day at the configured local time, for as long as the app is up."""
+    while True:
+        next_run = next_daily_run(hour, minute, datetime.now(SCHEDULE_TIMEZONE))
+        _schedule_state["next_run"] = next_run
+        # Sleep in short slices so a clock change or a suspended host can't make it miss the slot.
+        while datetime.now(SCHEDULE_TIMEZONE) < next_run:
+            time.sleep(min(60, max(1, (next_run - datetime.now(SCHEDULE_TIMEZONE)).total_seconds())))
+        if not start_run("scheduled"):
+            print("Scheduled run skipped: a run was already in progress.", flush=True)
+
+
+def start_daily_schedule():
+    if not DAILY_RUN_AT:
+        print("DAILY_RUN_AT not set; checks only run when someone presses Run checks.", flush=True)
+        return
+    hour, minute = parse_daily_time(DAILY_RUN_AT)
+    threading.Thread(target=run_daily_schedule, args=(hour, minute), daemon=True).start()
+    print(f"Checks will run automatically every day at {hour:02d}:{minute:02d} ({SCHEDULE_TIMEZONE.key}).", flush=True)
 
 
 def checks_for_template():
@@ -122,8 +175,17 @@ def checks_for_template():
             "status": result["status"],
             "message": result["message"],
             "latency_ms": result.get("latency_ms"),
+            "steps": result.get("steps", []),
         })
-    return rows, stored.get("checked_at")
+    return rows, stored.get("checked_at"), stored.get("trigger")
+
+
+def describe_checked_at(checked_at, trigger):
+    if not checked_at:
+        return None
+    local = datetime.fromisoformat(checked_at).astimezone(SCHEDULE_TIMEZONE)
+    how = {"scheduled": "automatic daily run", "manual": "run by hand"}.get(trigger, "run")
+    return f"{local:%a %d %b %Y, %H:%M} ({how})"
 
 
 @app.route("/health")
@@ -133,12 +195,16 @@ def health():
 
 @app.route("/")
 def index():
-    rows, checked_at = checks_for_template()
+    rows, checked_at, trigger = checks_for_template()
+    next_run = _schedule_state["next_run"]
     return render_template_string(
         PAGE_TEMPLATE,
-        api_rows=[row for row in rows if row["kind"] == "api"],
-        reachability_rows=[row for row in rows if row["kind"] == "reachability"],
-        checked_at=checked_at,
+        sections=[
+            ("Live API checks", [row for row in rows if row["kind"] == "api"]),
+            ("Website scraper checks", [row for row in rows if row["kind"] == "scraper"]),
+        ],
+        checked_at=describe_checked_at(checked_at, trigger),
+        next_run=f"{next_run:%a %d %b, %H:%M}" if next_run else None,
         spotify_connected=spotify_check.is_user_connected(),
         csrf_token=get_csrf_token(),
     )
@@ -149,8 +215,7 @@ def index():
 def run_checks():
     if not has_valid_csrf(request.form.get("csrf_token")):
         return Response("Invalid CSRF token", status=403)
-    if not get_run_state()["active"]:
-        threading.Thread(target=run_all_checks_in_background, daemon=True).start()
+    start_run("manual")
     return Response("", status=204)
 
 
@@ -297,7 +362,19 @@ button:disabled { opacity: .5; cursor: default; background-color: transparent; c
 .pill { font-family: var(--mono); font-size: .7rem; letter-spacing: .04em; text-transform: uppercase; border-radius: 2px; padding: 3px 9px; white-space: nowrap; }
 .pill-ok { color: var(--phosphor); border: 1px solid var(--phosphor); }
 .pill-fail { color: var(--signal); border: 1px solid var(--signal); }
+.pill-warn { color: var(--amber); border: 1px solid var(--amber); }
 .pill-not_configured, .pill-never_run { color: var(--text-faint); border: 1px solid var(--text-faint); }
+.steps { list-style: none; margin: .75rem 0 0; padding: .5rem 0 0; border-top: 1px dashed var(--line); font-size: .82rem; }
+.steps li { display: grid; grid-template-columns: 4.5rem 1fr; gap: .15rem .75rem; padding: .2rem 0; }
+.step-status { font-family: var(--mono); font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; padding-top: .1rem; }
+.step-ok { color: var(--phosphor); }
+.step-warn { color: var(--amber); }
+.step-fail { color: var(--signal); }
+.step-skipped { color: var(--text-faint); }
+.step-name { color: var(--text); font-family: var(--mono); }
+.step-detail { grid-column: 2; color: var(--text-dim); overflow-wrap: anywhere; }
+.step-detail .latency { color: var(--text-faint); font-family: var(--mono); }
+details.step-list summary { cursor: pointer; margin-top: .5rem; color: var(--text-faint); font-family: var(--mono); font-size: .75rem; }
 .row-message { margin-top: 0.5rem; color: var(--text-dim); font-size: 0.9rem; }
 .row-message .latency { color: var(--text-faint); font-family: var(--mono); }
 @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
@@ -331,10 +408,12 @@ button:disabled { opacity: .5; cursor: default; background-color: transparent; c
     {% else %}
     <span class="checked-at">Never run yet</span>
     {% endif %}
+    {% if next_run %}<span class="checked-at">Next automatic run {{ next_run }}</span>{% endif %}
   </div>
 
-  <h2 class="section-heading">Live API checks</h2>
-  {% for row in api_rows %}
+  {% for heading, section_rows in sections %}
+  <h2 class="section-heading">{{ heading }}</h2>
+  {% for row in section_rows %}
   <div class="row">
     <div class="row-top">
       <div>
@@ -351,28 +430,22 @@ button:disabled { opacity: .5; cursor: default; background-color: transparent; c
       {{ row.message }}
       {% if row.latency_ms is not none %}<span class="latency"> - {{ row.latency_ms }}ms</span>{% endif %}
     </div>
+    {% if row.steps %}
+    <details class="step-list"{% if row.status in ('fail', 'warn') %} open{% endif %}>
+      <summary>{{ row.steps|length }} steps</summary>
+      <ul class="steps">
+        {% for step in row.steps %}
+        <li>
+          <span class="step-status step-{{ step.status }}">{{ step.status }}</span>
+          <span class="step-name">{{ step.name }}</span>
+          <span class="step-detail">{{ step.detail }}{% if step.latency_ms is not none %}<span class="latency"> - {{ step.latency_ms }}ms</span>{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
   </div>
   {% endfor %}
-
-  <h2 class="section-heading">Reachability-only checks</h2>
-  {% for row in reachability_rows %}
-  <div class="row">
-    <div class="row-top">
-      <div>
-        <div class="row-label">{{ row.label }}</div>
-        <div class="projects">
-          {% for project in row.projects %}
-          <span class="badge">{{ project }}</span>
-          {% endfor %}
-        </div>
-      </div>
-      <span class="pill pill-{{ row.status }}">{{ row.status.replace('_', ' ') }}</span>
-    </div>
-    <div class="row-message">
-      {{ row.message }}
-      {% if row.latency_ms is not none %}<span class="latency"> - {{ row.latency_ms }}ms</span>{% endif %}
-    </div>
-  </div>
   {% endfor %}
   </main>
 <script src="/run-progress.js"></script>
@@ -433,4 +506,5 @@ if __name__ == "__main__":
     if not auth_enabled():
         print("WARNING: WEB_USERNAME/WEB_PASSWORD not set; the Run checks button is unauthenticated.", flush=True)
     bootstrap_spotify_login()
+    start_daily_schedule()
     app.run(host=host, port=port, threaded=True)

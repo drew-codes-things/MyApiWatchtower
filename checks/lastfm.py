@@ -1,10 +1,11 @@
 import os
 
-import requests
+from checks.probe import Probe, StepFailure, get_json, non_empty_list
+from checks.result import not_configured, timed
 
-from checks.result import fail, not_configured, ok, redact, timed
-
-LASTFM_API_URL = "http://ws.audioscrobbler.com/2.0/"
+LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
+KNOWN_ARTIST = "Radiohead"
+KNOWN_TRACK = "Creep"
 
 
 def run():
@@ -12,17 +13,30 @@ def run():
     if not api_key:
         return not_configured("LASTFM_API_KEY is not set")
 
-    def do_check():
-        params = {"method": "chart.gettopartists", "api_key": api_key, "format": "json", "limit": 1}
-        try:
-            response = requests.get(LASTFM_API_URL, params=params, timeout=10)
-        except requests.RequestException as error:
-            return fail(redact(f"Request failed: {error}", api_key))
-        if response.status_code != 200:
-            return fail(f"Last.fm returned unexpected status {response.status_code}")
-        body = response.json()
+    def lastfm(method, **params):
+        body = get_json(LASTFM_API_URL, params={
+            "method": method, "api_key": api_key, "format": "json", "autocorrect": 1, **params})
+        # Last.fm reports errors (bad key, suspended key, unknown method) as 200 with an "error" field.
         if "error" in body:
-            return fail(f"Last.fm returned an error: {body.get('message', body['error'])}")
-        return ok("Last.fm accepted the key and returned chart data")
+            raise StepFailure(f"Last.fm error {body['error']}: {body.get('message', 'no message')}")
+        return body
+
+    def track_tags():
+        # SpotifyDashTool's genre lookup tries the track's tags first...
+        body = lastfm("track.getInfo", artist=KNOWN_ARTIST, track=KNOWN_TRACK)
+        tags = non_empty_list(body, "track.toptags.tag")
+        return f"{len(tags)} track tags, top '{tags[0].get('name')}'"
+
+    def artist_tags():
+        # ...and falls back to the artist's tags when the track has none.
+        body = lastfm("artist.getTopTags", artist=KNOWN_ARTIST)
+        tags = non_empty_list(body, "toptags.tag")
+        return f"{len(tags)} artist tags, top '{tags[0].get('name')}'"
+
+    def do_check():
+        probe = Probe(api_key)
+        probe.step("SpotifyDashTool genres (track.getInfo tags)", track_tags)
+        probe.step("SpotifyDashTool genre fallback (artist.getTopTags)", artist_tags)
+        return probe.result()
 
     return timed(do_check)
