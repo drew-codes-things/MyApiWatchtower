@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, redirect, render_template_string, request, session
 
+from alerts import send_alert, status_changes
 from checks.result import fail
 from checks.settings import configured_url
 from credentials_store import InvalidCredential, apply_saved_credentials, clean_value, is_set, save_credentials
@@ -117,8 +118,10 @@ def run_all_checks_in_background(trigger, checks):
                 _run_state["completed"] += 1
 
     checked_at = datetime.now(timezone.utc).isoformat()
+    previous = load_results().get("results", {})
     try:
         save_results(checked_at, results, trigger)
+        send_alert(status_changes(previous, results, {check["id"]: check["label"] for check in checks}))
     finally:
         with _run_lock:
             _run_state["active"] = False

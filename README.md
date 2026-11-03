@@ -24,6 +24,8 @@ A fresh install watches nothing. You add the services you care about from the pa
 
 Each service can be edited or removed from its row. Saving or adding a service checks it straight away.
 
+When `DISCORD_ALERT_WEBHOOK_URL` is set, a full run posts to that Discord webhook whenever a service starts failing or comes back, and stays quiet otherwise.
+
 The results page is public and read-only. Running checks and adding, editing or removing services all need the login from `WEB_USERNAME`/`WEB_PASSWORD`; without one set, the page can't be changed from the browser at all.
 
 ## Plugins: deeper checks in Python

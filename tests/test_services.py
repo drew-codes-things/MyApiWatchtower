@@ -114,3 +114,23 @@ def test_plugins_load_from_a_folder(tmp_path, monkeypatch):
     assert [plugin.__name__ for plugin in plugins] == ["my_checks"]
     assert registry.plugin_checks()[0]["id"] == "x"
 
+
+def test_alerts_only_mention_checks_that_changed(monkeypatch):
+    import alerts
+    previous = {"a": {"status": "ok"}, "b": {"status": "fail"}, "c": {"status": "fail"}, "d": {"status": "ok"}}
+    current = {"a": {"status": "fail", "message": "HTTP 500"}, "b": {"status": "ok", "message": ""},
+               "c": {"status": "fail", "message": "still"}, "d": {"status": "ok", "message": ""}, "e": {"status": "fail", "message": "new"}}
+    assert alerts.status_changes(previous, current, {"a": "API A", "b": "API B"}) == [
+        "🔴 API A is failing: HTTP 500", "🟢 API B is working again"]
+
+
+@responses.activate
+def test_alerts_go_to_the_discord_webhook_when_set(monkeypatch):
+    import alerts
+    hook = "https://discord.example.test/api/webhooks/1/abc"
+    responses.add(responses.POST, hook, status=204)
+    monkeypatch.delenv("DISCORD_ALERT_WEBHOOK_URL", raising=False)
+    assert alerts.send_alert(["x"]) is False
+    monkeypatch.setenv("DISCORD_ALERT_WEBHOOK_URL", hook)
+    assert alerts.send_alert(["🔴 API A is failing"]) is True
+    assert json.loads(responses.calls[0].request.body)["content"].endswith("🔴 API A is failing")
