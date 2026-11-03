@@ -133,22 +133,32 @@ def parse_daily_time(value):
     try:
         hour, minute = (int(part) for part in value.split(":"))
     except ValueError as error:
-        raise ValueError(f"DAILY_RUN_AT must look like HH:MM, got {value!r}") from error
+        raise ValueError(f"DAILY_RUN_AT times must look like HH:MM, got {value!r}") from error
     if not (0 <= hour < 24 and 0 <= minute < 60):
-        raise ValueError(f"DAILY_RUN_AT is out of range: {value!r}")
+        raise ValueError(f"DAILY_RUN_AT time is out of range: {value!r}")
     return hour, minute
 
 
-def next_daily_run(hour, minute, now):
-    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if candidate <= now:
-        candidate += timedelta(days=1)
-    return candidate
+def parse_daily_times(value):
+    times = sorted({parse_daily_time(part.strip()) for part in value.split(",") if part.strip()})
+    if not times:
+        raise ValueError(f"DAILY_RUN_AT has no times in it: {value!r}")
+    return times
 
 
-def run_daily_schedule(hour, minute):
+def next_daily_run(times, now):
+    candidates = []
+    for hour, minute in times:
+        candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate <= now:
+            candidate += timedelta(days=1)
+        candidates.append(candidate)
+    return min(candidates)
+
+
+def run_daily_schedule(times):
     while True:
-        next_run = next_daily_run(hour, minute, datetime.now(SCHEDULE_TIMEZONE))
+        next_run = next_daily_run(times, datetime.now(SCHEDULE_TIMEZONE))
         _schedule_state["next_run"] = next_run
         while datetime.now(SCHEDULE_TIMEZONE) < next_run:
             time.sleep(min(60, max(1, (next_run - datetime.now(SCHEDULE_TIMEZONE)).total_seconds())))
@@ -160,9 +170,10 @@ def start_daily_schedule():
     if not DAILY_RUN_AT:
         print("DAILY_RUN_AT not set; checks only run when someone presses Run checks.", flush=True)
         return
-    hour, minute = parse_daily_time(DAILY_RUN_AT)
-    threading.Thread(target=run_daily_schedule, args=(hour, minute), daemon=True).start()
-    print(f"Checks will run automatically every day at {hour:02d}:{minute:02d} ({SCHEDULE_TIMEZONE.key}).", flush=True)
+    times = parse_daily_times(DAILY_RUN_AT)
+    threading.Thread(target=run_daily_schedule, args=(times,), daemon=True).start()
+    listed = ", ".join(f"{hour:02d}:{minute:02d}" for hour, minute in times)
+    print(f"Checks will run automatically every day at {listed} ({SCHEDULE_TIMEZONE.key}).", flush=True)
 
 
 def describe_field(field):

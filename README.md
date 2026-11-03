@@ -51,7 +51,7 @@ python app.py
 
 Set `WEB_USERNAME`/`WEB_PASSWORD` in `.env`, open `http://127.0.0.1:5002`, and use **Add a service**. Services are saved to `services.json` next to `app.py` (owner-only permissions, git-ignored).
 
-`DAILY_RUN_AT` (default in `.env.example`: `05:30`) runs every check automatically once a day at that time in `SCHEDULE_TIMEZONE` (default `Europe/London`). Leave it empty to only run checks by hand.
+`DAILY_RUN_AT` (default in `.env.example`: `05:30,17:30`) runs every check automatically at each listed time, every day, in `SCHEDULE_TIMEZONE` (default `Europe/London`). Give one time (`05:30`) for once a day, or several separated by commas. Leave it empty to only run checks by hand.
 
 ### Editing plugin credentials and API links
 
