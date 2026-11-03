@@ -2,7 +2,6 @@ import os
 import secrets
 import threading
 import time
-import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -12,12 +11,12 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, redirect, render_template_string, request, session
 
-import checks.spotify as spotify_check
 from checks.result import fail
 from checks.settings import configured_url
 from credentials_store import InvalidCredential, apply_saved_credentials, clean_value, is_set, save_credentials
-from registry import CHECKS, credentials_for, get_check
-from results_store import load_results, save_results, save_single_result
+from registry import all_checks, credentials_for, get_check, plugin_notes, section_title, setup_plugins
+from results_store import load_results, remove_result, save_results, save_single_result
+from services_store import InvalidService, delete_service, get_service, save_service, service_from_form
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -34,7 +33,7 @@ DAILY_RUN_AT = (os.getenv("DAILY_RUN_AT") or "").strip()
 SCHEDULE_TIMEZONE = ZoneInfo((os.getenv("SCHEDULE_TIMEZONE") or "Europe/London").strip())
 
 _run_lock = threading.Lock()
-_run_state = {"active": False, "completed": 0, "total": len(CHECKS)}
+_run_state = {"active": False, "completed": 0, "total": 0}
 _schedule_state = {"next_run": None}
 
 
@@ -97,15 +96,16 @@ def start_run(trigger):
             return False
         _run_state["active"] = True
         _run_state["completed"] = 0
-        _run_state["total"] = len(CHECKS)
-    threading.Thread(target=run_all_checks_in_background, args=(trigger,), daemon=True).start()
+        checks = all_checks()
+        _run_state["total"] = len(checks)
+    threading.Thread(target=run_all_checks_in_background, args=(trigger, checks), daemon=True).start()
     return True
 
 
-def run_all_checks_in_background(trigger):
+def run_all_checks_in_background(trigger, checks):
     results = {}
     with ThreadPoolExecutor(max_workers=8) as executor:
-        future_to_id = {executor.submit(check["run"]): check["id"] for check in CHECKS}
+        future_to_id = {executor.submit(check["run"]): check["id"] for check in checks}
         for future in as_completed(future_to_id):
             check_id = future_to_id[future]
             try:
@@ -169,11 +169,26 @@ def describe_field(field):
     return described
 
 
+def public_service_fields(service):
+    if service is None:
+        return None
+    return {**{key: value for key, value in service.items() if key != "header_value"},
+            "has_header_value": bool(service.get("header_value"))}
+
+
+def sections_for(rows):
+    kinds = []
+    for row in rows:
+        if row["kind"] not in kinds:
+            kinds.append(row["kind"])
+    return [(section_title(kind), [row for row in rows if row["kind"] == kind]) for kind in kinds]
+
+
 def checks_for_template():
     stored = load_results()
     results = stored.get("results", {})
     rows = []
-    for check in CHECKS:
+    for check in all_checks():
         result = results.get(check["id"], {"status": "never_run", "message": "Not run yet", "latency_ms": None})
         rows.append({
             "id": check["id"],
@@ -185,6 +200,7 @@ def checks_for_template():
             "latency_ms": result.get("latency_ms"),
             "steps": result.get("steps", []),
             "credentials": [describe_field(field) for field in credentials_for(check)],
+            "service": public_service_fields(check.get("service")),
         })
     return rows, stored.get("checked_at"), stored.get("trigger")
 
@@ -208,13 +224,10 @@ def index():
     next_run = _schedule_state["next_run"]
     return render_template_string(
         PAGE_TEMPLATE,
-        sections=[
-            ("Live API checks", [row for row in rows if row["kind"] == "api"]),
-            ("Website scraper checks", [row for row in rows if row["kind"] == "scraper"]),
-        ],
+        sections=sections_for(rows),
         checked_at=describe_checked_at(checked_at, trigger),
         next_run=f"{next_run:%a %d %b, %H:%M}" if next_run else None,
-        spotify_connected=spotify_check.is_user_connected(),
+        notes=plugin_notes(),
         csrf_token=get_csrf_token(),
         can_edit_credentials=auth_enabled(),
         notice=request.args.get("notice", ""),
@@ -250,27 +263,84 @@ def credential_updates(check, form):
     return updates
 
 
+def editing_refused():
+    if not auth_enabled():
+        return Response("Set WEB_USERNAME and WEB_PASSWORD before editing from the page", status=403)
+    if not has_valid_csrf(request.form.get("csrf_token")):
+        return Response("Invalid CSRF token", status=403)
+    return None
+
+
+def back_to_page(notice, anchor=""):
+    return redirect(f"/?notice={quote(notice)}" + (f"#{anchor}" if anchor else ""), code=303)
+
+
 @app.route("/credentials/<check_id>", methods=["POST"])
 @requires_auth
 def edit_credentials(check_id):
-    if not auth_enabled():
-        return Response("Set WEB_USERNAME and WEB_PASSWORD before editing credentials from the page", status=403)
-    if not has_valid_csrf(request.form.get("csrf_token")):
-        return Response("Invalid CSRF token", status=403)
+    refused = editing_refused()
+    if refused:
+        return refused
     check = get_check(check_id)
     if check is None or not credentials_for(check):
         return Response("No credentials to edit for that check", status=404)
     try:
         updates = credential_updates(check, request.form)
     except InvalidCredential as error:
-        return redirect(f"/?notice={quote(str(error))}#{check_id}", code=303)
+        return back_to_page(str(error), check_id)
     if not updates:
-        return redirect(f"/?notice={quote('Nothing changed - every field was left blank')}#{check_id}", code=303)
+        return back_to_page("Nothing changed - every field was left blank", check_id)
     save_credentials(updates)
     print(f"Credentials updated for {check_id}: {', '.join(sorted(updates))}", flush=True)
     result = run_single_check(check)
-    notice = f"Saved {check['label']} settings and re-ran the check: {result.status.replace('_', ' ')}"
-    return redirect(f"/?notice={quote(notice)}#{check_id}", code=303)
+    return back_to_page(f"Saved {check['label']} settings and re-ran the check: {result.status.replace('_', ' ')}", check_id)
+
+
+@app.route("/services", methods=["POST"])
+@requires_auth
+def add_service():
+    refused = editing_refused()
+    if refused:
+        return refused
+    try:
+        service = save_service(service_from_form(request.form))
+    except InvalidService as error:
+        return back_to_page(str(error), "add-service")
+    print(f"Service added: {service['id']}", flush=True)
+    result = run_single_check(get_check(service["id"]))
+    return back_to_page(f"Added {service['name']} and checked it: {result.status.replace('_', ' ')}", service["id"])
+
+
+@app.route("/services/<service_id>", methods=["POST"])
+@requires_auth
+def edit_service(service_id):
+    refused = editing_refused()
+    if refused:
+        return refused
+    existing = get_service(service_id)
+    if existing is None:
+        return Response("No service with that id", status=404)
+    try:
+        service = save_service(service_from_form(request.form, existing))
+    except InvalidService as error:
+        return back_to_page(str(error), service_id)
+    print(f"Service edited: {service_id}", flush=True)
+    result = run_single_check(get_check(service_id))
+    return back_to_page(f"Saved {service['name']} and re-checked it: {result.status.replace('_', ' ')}", service_id)
+
+
+@app.route("/services/<service_id>/delete", methods=["POST"])
+@requires_auth
+def remove_service(service_id):
+    refused = editing_refused()
+    if refused:
+        return refused
+    existing = get_service(service_id)
+    if existing is None or not delete_service(service_id):
+        return Response("No service with that id", status=404)
+    remove_result(service_id)
+    print(f"Service removed: {service_id}", flush=True)
+    return back_to_page(f"Removed {existing['name']}")
 
 
 @app.route("/run-status")
@@ -368,8 +438,7 @@ body {
 .topbar h1 { margin: 0; font-family: var(--sans); font-size: clamp(1.15rem, 3vw, 1.35rem); font-weight: 500; }
 main { max-width: 880px; margin: 0 auto; padding: 0 20px 60px; }
 p.subtitle { color: var(--text-dim); }
-p.spotify-note { color: var(--text-faint); font-family: var(--sans); font-size: .8rem; }
-p.spotify-note code { color: var(--text-dim); }
+p.plugin-note { color: var(--text-faint); font-family: var(--sans); font-size: .8rem; }
 h2.section-heading { font-family: var(--sans); font-size: 1rem; font-weight: 500; color: var(--text); border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-top: 2.5rem; }
 .toolbar { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 1.5rem 0; }
 button {
@@ -421,6 +490,14 @@ details.credentials summary { cursor: pointer; margin-top: .5rem; color: var(--t
 .credential-form input { font-family: var(--mono); font-size: .82rem; color: var(--text); background: rgba(0, 0, 0, .35); border: 1px solid var(--line-bright); border-radius: 10px; padding: .5rem .7rem; width: 100%; }
 .credentials .hint { color: var(--text-faint); font-size: .75rem; margin: 0; }
 .credential-form button { justify-self: start; padding: 8px 14px; font-size: .82rem; }
+.credential-form select { font-family: var(--sans); font-size: .82rem; color: var(--text); background: rgba(0, 0, 0, .35); border: 1px solid var(--line-bright); border-radius: 10px; padding: .45rem .6rem; }
+.field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+@media (max-width: 560px) { .field-pair { grid-template-columns: 1fr; } }
+.form-actions { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
+button.button-quiet { background: transparent; border: 1px solid var(--line-bright); color: var(--text-dim); }
+details.add-service { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: .8rem 1.25rem; margin-bottom: 1.5rem; }
+details.add-service > summary { cursor: pointer; font-weight: 500; }
+.empty-state { color: var(--text-dim); background: var(--panel); border: 1px dashed var(--line-bright); border-radius: 16px; padding: 1.25rem; }
 </style>
 </head>
 <body>
@@ -428,10 +505,10 @@ details.credentials summary { cursor: pointer; margin-top: .5rem; color: var(--t
     <h1>MyApiWatchtower</h1>
   </header>
   <main>
-  <p class="subtitle">Live status of every external API drew-codes-things' projects depend on.</p>
-  {% if not spotify_connected %}
-  <p class="spotify-note">Spotify not connected. Check the terminal app.py was started from for the authorize link.</p>
-  {% endif %}
+  <p class="subtitle">Live status of the APIs and services you depend on.</p>
+  {% for note in notes %}
+  <p class="plugin-note">{{ note }}</p>
+  {% endfor %}
 
   {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
 
@@ -451,6 +528,36 @@ details.credentials summary { cursor: pointer; margin-top: .5rem; color: var(--t
     {% endif %}
     {% if next_run %}<span class="checked-at">Next automatic run {{ next_run }}</span>{% endif %}
   </div>
+
+  {% if can_edit_credentials %}
+  <details class="add-service" id="add-service">
+    <summary>Add a service</summary>
+    {% set svc = none %}
+    <form class="credential-form" method="post" action="/services" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="field-pair">
+          <label><span>Name</span><input name="name" required maxlength="60" value="{{ svc.name if svc else '' }}" placeholder="My API"></label>
+          <label><span>Method</span><select name="method">{% for method in ['GET', 'HEAD', 'POST'] %}<option{% if (svc.method if svc else 'GET') == method %} selected{% endif %}>{{ method }}</option>{% endfor %}</select></label>
+        </div>
+        <label><span>URL</span><input name="url" type="url" required maxlength="512" spellcheck="false" value="{{ svc.url if svc else '' }}" placeholder="https://api.example.com/health"></label>
+        <div class="field-pair">
+          <label><span>Counts as up when the status is</span><input name="expected_status" maxlength="60" value="{{ svc.expected_status if svc else '200-399' }}" placeholder="200-399"></label>
+          <label><span>Timeout (seconds)</span><input name="timeout" inputmode="numeric" maxlength="2" value="{{ svc.timeout if svc else 15 }}"></label>
+        </div>
+        <label><span>Response must contain <span class="field-state">(optional)</span></span><input name="contains" maxlength="200" value="{{ svc.contains if svc else '' }}" placeholder='"status":"ok"'></label>
+        <div class="field-pair">
+          <label><span>Header name <span class="field-state">(optional, e.g. Authorization)</span></span><input name="header_name" maxlength="64" spellcheck="false" value="{{ svc.header_name if svc else '' }}"></label>
+          <label><span>Header value <span class="field-state">(secret{% if svc and svc.has_header_value %} - set{% endif %})</span></span><input name="header_value" type="password" maxlength="512" autocomplete="off" placeholder="{{ 'Leave blank to keep the current value' if svc and svc.has_header_value else 'Bearer ...' }}"></label>
+        </div>
+        <label><span>Tags <span class="field-state">(optional, comma-separated)</span></span><input name="tags" maxlength="300" value="{{ svc.tags|join(', ') if svc else '' }}" placeholder="homelab, discord"></label>
+        <div class="form-actions"><button type="submit">Add and check</button></div>
+    </form>
+  </details>
+  {% endif %}
+
+  {% if not sections %}
+  <p class="empty-state">Nothing is being watched yet. {% if can_edit_credentials %}Use <strong>Add a service</strong> above to add the first one.{% else %}Set WEB_USERNAME and WEB_PASSWORD, then add services from this page.{% endif %}</p>
+  {% endif %}
 
   {% for heading, section_rows in sections %}
   <h2 class="section-heading">{{ heading }}</h2>
@@ -485,7 +592,39 @@ details.credentials summary { cursor: pointer; margin-top: .5rem; color: var(--t
       </ul>
     </details>
     {% endif %}
-    {% if row.credentials %}
+    {% if row.service %}
+    <details class="credentials">
+      <summary>Edit or remove</summary>
+      {% if can_edit_credentials %}
+      {% set svc = row.service %}
+      <form class="credential-form" method="post" action="/services/{{ row.id }}" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="field-pair">
+          <label><span>Name</span><input name="name" required maxlength="60" value="{{ svc.name if svc else '' }}" placeholder="My API"></label>
+          <label><span>Method</span><select name="method">{% for method in ['GET', 'HEAD', 'POST'] %}<option{% if (svc.method if svc else 'GET') == method %} selected{% endif %}>{{ method }}</option>{% endfor %}</select></label>
+        </div>
+        <label><span>URL</span><input name="url" type="url" required maxlength="512" spellcheck="false" value="{{ svc.url if svc else '' }}" placeholder="https://api.example.com/health"></label>
+        <div class="field-pair">
+          <label><span>Counts as up when the status is</span><input name="expected_status" maxlength="60" value="{{ svc.expected_status if svc else '200-399' }}" placeholder="200-399"></label>
+          <label><span>Timeout (seconds)</span><input name="timeout" inputmode="numeric" maxlength="2" value="{{ svc.timeout if svc else 15 }}"></label>
+        </div>
+        <label><span>Response must contain <span class="field-state">(optional)</span></span><input name="contains" maxlength="200" value="{{ svc.contains if svc else '' }}" placeholder='"status":"ok"'></label>
+        <div class="field-pair">
+          <label><span>Header name <span class="field-state">(optional, e.g. Authorization)</span></span><input name="header_name" maxlength="64" spellcheck="false" value="{{ svc.header_name if svc else '' }}"></label>
+          <label><span>Header value <span class="field-state">(secret{% if svc and svc.has_header_value %} - set{% endif %})</span></span><input name="header_value" type="password" maxlength="512" autocomplete="off" placeholder="{{ 'Leave blank to keep the current value' if svc and svc.has_header_value else 'Bearer ...' }}"></label>
+        </div>
+        <label><span>Tags <span class="field-state">(optional, comma-separated)</span></span><input name="tags" maxlength="300" value="{{ svc.tags|join(', ') if svc else '' }}" placeholder="homelab, discord"></label>
+        <div class="form-actions"><button type="submit">Save and re-check</button></div>
+      </form>
+      <form class="credential-form" method="post" action="/services/{{ row.id }}/delete">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-actions"><button type="submit" class="button-quiet">Remove this service</button><span class="hint">Removing deletes its settings and last result.</span></div>
+      </form>
+      {% else %}
+      <p class="hint">Set WEB_USERNAME and WEB_PASSWORD to edit services from this page.</p>
+      {% endif %}
+    </details>
+    {% elif row.credentials %}
     <details class="credentials">
       <summary>{{ 'Edit API link' if row.credentials|rejectattr('url')|list|length == 0 else 'Edit credentials and API link' if row.credentials|selectattr('url')|list else 'Edit credentials' }}</summary>
       {% if can_edit_credentials %}
@@ -519,57 +658,11 @@ details.credentials summary { cursor: pointer; margin-top: .5rem; color: var(--t
 """
 
 
-_spotify_login_state = {"state": None}
-
-
-def bootstrap_spotify_login():
-    oauth_manager = spotify_check.make_oauth_manager()
-    if oauth_manager is None:
-        print("Spotify: SPOTIFY_CLIENT_ID/SPOTIFY_CLIENT_SECRET not set; Spotify checks disabled.", flush=True)
-        return
-    if spotify_check.is_user_connected():
-        return
-
-    state = secrets.token_urlsafe(16)
-    _spotify_login_state["state"] = state
-    authorize_url = oauth_manager.get_authorize_url(state=state)
-
-    print("Spotify: open this URL in a browser to authorize (one-time setup):", flush=True)
-    print(authorize_url, flush=True)
-    try:
-        webbrowser.open(authorize_url)
-    except webbrowser.Error:
-        pass
-
-
-@app.route("/callback")
-def spotify_callback():
-    error = request.args.get("error")
-    if error:
-        return Response(f"Spotify authorization failed: {error}", status=400)
-    returned_state = request.args.get("state")
-    expected_state = _spotify_login_state.get("state")
-    if not expected_state or returned_state != expected_state:
-        return Response("Mismatched or expired state parameter", status=400)
-    _spotify_login_state["state"] = None
-    code = request.args.get("code")
-    oauth_manager = spotify_check.make_oauth_manager()
-    if oauth_manager is None:
-        return Response("SPOTIFY_CLIENT_ID/SPOTIFY_CLIENT_SECRET are not set", status=400)
-    try:
-        oauth_manager.get_access_token(code, as_dict=False, check_cache=False)
-    except Exception as error:
-        print(f"Spotify: authorization failed - {error}", flush=True)
-        return Response(f"Spotify authorization failed: {error}", status=400)
-    print("Spotify: authorized.", flush=True)
-    return Response("<p>Spotify authorized - you can close this tab.</p>", mimetype="text/html")
-
-
 if __name__ == "__main__":
     host = os.getenv("BIND_HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "5002"))
     if not auth_enabled():
         print("WARNING: WEB_USERNAME/WEB_PASSWORD not set; the Run checks button is unauthenticated.", flush=True)
-    bootstrap_spotify_login()
+    setup_plugins(app)
     start_daily_schedule()
     app.run(host=host, port=port, threaded=True)

@@ -29,3 +29,13 @@ def save_single_result(check_id, result, checked_at):
         with open(RESULTS_PATH, "w", encoding="utf-8") as file:
             json.dump(stored, file, indent=2)
     return stored
+
+
+def remove_result(check_id):
+    with _lock:
+        stored = load_results()
+        if stored["results"].pop(check_id, None) is None:
+            return False
+        with open(RESULTS_PATH, "w", encoding="utf-8") as file:
+            json.dump(stored, file, indent=2)
+    return True

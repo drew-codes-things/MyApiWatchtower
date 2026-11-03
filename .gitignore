@@ -11,3 +11,6 @@ venv/
 .venv/
 credentials.json
 credentials.json.tmp
+services.json
+services.json.tmp
+plugins/

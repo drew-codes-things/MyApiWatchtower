@@ -1,7 +1,8 @@
-import json
 import os
 import threading
 from urllib.parse import urlparse
+
+from private_json import read_private_json, write_private_json
 
 CREDENTIALS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "credentials.json")
 MAX_VALUE_LENGTH = 512
@@ -13,22 +14,10 @@ class InvalidCredential(ValueError):
 
 
 def _read():
-    if not os.path.exists(CREDENTIALS_PATH):
-        return {}
-    with open(CREDENTIALS_PATH, "r", encoding="utf-8") as file:
-        saved = json.load(file)
+    saved = read_private_json(CREDENTIALS_PATH, {})
     if not isinstance(saved, dict):
         raise ValueError(f"{CREDENTIALS_PATH} should hold a JSON object")
     return {str(key): str(value) for key, value in saved.items()}
-
-
-def _write(saved):
-    temporary_path = CREDENTIALS_PATH + ".tmp"
-    descriptor = os.open(temporary_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-        json.dump(saved, file, indent=2, sort_keys=True)
-    os.chmod(temporary_path, 0o600)
-    os.replace(temporary_path, CREDENTIALS_PATH)
 
 
 def apply_saved_credentials():
@@ -57,7 +46,7 @@ def save_credentials(updates):
     with _lock:
         saved = _read()
         saved.update(updates)
-        _write(saved)
+        write_private_json(CREDENTIALS_PATH, saved)
     os.environ.update(updates)
     return sorted(updates)
 
