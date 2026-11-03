@@ -60,6 +60,12 @@ Fill in whichever keys you want checked - `TMDB_API_KEY`, `SPOTIFY_CLIENT_ID`/`S
 
 `DAILY_RUN_AT` (default in `.env.example`: `05:30`) runs every check automatically once a day at that time in `SCHEDULE_TIMEZONE` (default `Europe/London`), lined up with the server's nightly backup. Leave it empty to only run checks by hand. Set `WEB_USERNAME`/`WEB_PASSWORD` to gate the Run checks button behind HTTP Basic Auth (recommended, since it triggers live calls with real secrets).
 
+### Editing credentials and API links from the page
+
+Each check has an **Edit** panel for the keys, tokens and API links it uses. Saving writes the new values to `credentials.json` next to `app.py` (owner-only permissions, git-ignored), applies them straight away and re-runs that check. Values saved there take priority over `.env` and the container's environment, so a change sticks without redeploying. Secrets are never shown back: leave a secret field blank to keep its current value. API links are shown and can be edited in place; only full `http://` or `https://` links are accepted. Delete a line from `credentials.json` and restart to go back to the `.env` value or the built-in default.
+
+Editing only works when `WEB_USERNAME`/`WEB_PASSWORD` are set, so nobody without the login can swap your keys. This only changes what MyApiWatchtower tests with; the projects themselves keep their own settings.
+
 ### 2. Spotify
 
 The User OAuth check reuses the same Spotify Developer app already used by `SpotifyDashTool`/`DrewsMusicBot`. In that app's [dashboard](https://developer.spotify.com/dashboard), add a new Redirect URI matching wherever this app runs: `http://127.0.0.1:5002/callback` (or whatever port you set `PORT` to in `.env`, if you'd rather not use the default 5002). The callback has to land on this same port since that's the only one the app is actually listening on.

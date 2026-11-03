@@ -2,6 +2,7 @@ import os
 
 from checks.probe import Probe, StepFailure, get_json, non_empty_list
 from checks.result import not_configured, timed
+from checks.settings import configured_url
 
 LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
 KNOWN_ARTIST = "Radiohead"
@@ -14,7 +15,7 @@ def run():
         return not_configured("LASTFM_API_KEY is not set")
 
     def lastfm(method, **params):
-        body = get_json(LASTFM_API_URL, params={
+        body = get_json(configured_url("LASTFM_API_URL", LASTFM_API_URL) + "/", params={
             "method": method, "api_key": api_key, "format": "json", "autocorrect": 1, **params})
         if "error" in body:
             raise StepFailure(f"Last.fm error {body['error']}: {body.get('message', 'no message')}")

@@ -6,18 +6,22 @@ import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from functools import wraps
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from flask import Flask, Response, jsonify, render_template_string, request, session
+from flask import Flask, Response, jsonify, redirect, render_template_string, request, session
 
 import checks.spotify as spotify_check
 from checks.result import fail
-from registry import CHECKS
-from results_store import load_results, save_results
+from checks.settings import configured_url
+from credentials_store import InvalidCredential, apply_saved_credentials, clean_value, is_set, save_credentials
+from registry import CHECKS, credentials_for, get_check
+from results_store import load_results, save_results, save_single_result
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
+apply_saved_credentials()
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
@@ -158,6 +162,13 @@ def start_daily_schedule():
     print(f"Checks will run automatically every day at {hour:02d}:{minute:02d} ({SCHEDULE_TIMEZONE.key}).", flush=True)
 
 
+def describe_field(field):
+    described = {**field, "is_set": is_set(field["env"])}
+    if field.get("url"):
+        described["value"] = configured_url(field["env"], field["default"])
+    return described
+
+
 def checks_for_template():
     stored = load_results()
     results = stored.get("results", {})
@@ -173,6 +184,7 @@ def checks_for_template():
             "message": result["message"],
             "latency_ms": result.get("latency_ms"),
             "steps": result.get("steps", []),
+            "credentials": [describe_field(field) for field in credentials_for(check)],
         })
     return rows, stored.get("checked_at"), stored.get("trigger")
 
@@ -204,6 +216,8 @@ def index():
         next_run=f"{next_run:%a %d %b, %H:%M}" if next_run else None,
         spotify_connected=spotify_check.is_user_connected(),
         csrf_token=get_csrf_token(),
+        can_edit_credentials=auth_enabled(),
+        notice=request.args.get("notice", ""),
     )
 
 
@@ -214,6 +228,49 @@ def run_checks():
         return Response("Invalid CSRF token", status=403)
     start_run("manual")
     return Response("", status=204)
+
+
+def run_single_check(check):
+    try:
+        result = check["run"]()
+    except Exception as error:
+        result = fail(f"Check crashed: {error}")
+    save_single_result(check["id"], result.to_dict(), datetime.now(timezone.utc).isoformat())
+    return result
+
+
+def credential_updates(check, form):
+    updates = {}
+    for field in credentials_for(check):
+        value = clean_value(field["label"], form.get(field["env"], ""), is_url=field.get("url", False))
+        if field.get("url") and value == configured_url(field["env"], field["default"]):
+            continue
+        if value:
+            updates[field["env"]] = value
+    return updates
+
+
+@app.route("/credentials/<check_id>", methods=["POST"])
+@requires_auth
+def edit_credentials(check_id):
+    if not auth_enabled():
+        return Response("Set WEB_USERNAME and WEB_PASSWORD before editing credentials from the page", status=403)
+    if not has_valid_csrf(request.form.get("csrf_token")):
+        return Response("Invalid CSRF token", status=403)
+    check = get_check(check_id)
+    if check is None or not credentials_for(check):
+        return Response("No credentials to edit for that check", status=404)
+    try:
+        updates = credential_updates(check, request.form)
+    except InvalidCredential as error:
+        return redirect(f"/?notice={quote(str(error))}#{check_id}", code=303)
+    if not updates:
+        return redirect(f"/?notice={quote('Nothing changed - every field was left blank')}#{check_id}", code=303)
+    save_credentials(updates)
+    print(f"Credentials updated for {check_id}: {', '.join(sorted(updates))}", flush=True)
+    result = run_single_check(check)
+    notice = f"Saved {check['label']} settings and re-ran the check: {result.status.replace('_', ' ')}"
+    return redirect(f"/?notice={quote(notice)}#{check_id}", code=303)
 
 
 @app.route("/run-status")
@@ -356,6 +413,14 @@ details.step-list summary { cursor: pointer; margin-top: .5rem; color: var(--tex
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 }
 :focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.notice { background: var(--panel-raised); border: 1px solid var(--line-bright); border-radius: 12px; padding: .6rem 1rem; color: var(--text); font-size: .85rem; }
+details.credentials summary { cursor: pointer; margin-top: .5rem; color: var(--text-faint); font-family: var(--sans); font-size: .75rem; }
+.credential-form { display: grid; gap: .6rem; margin-top: .75rem; padding-top: .75rem; border-top: 1px dashed var(--line); }
+.credential-form label { display: grid; gap: .25rem; font-size: .8rem; color: var(--text-dim); }
+.credential-form .field-state { color: var(--text-faint); font-size: .72rem; }
+.credential-form input { font-family: var(--mono); font-size: .82rem; color: var(--text); background: rgba(0, 0, 0, .35); border: 1px solid var(--line-bright); border-radius: 10px; padding: .5rem .7rem; width: 100%; }
+.credentials .hint { color: var(--text-faint); font-size: .75rem; margin: 0; }
+.credential-form button { justify-self: start; padding: 8px 14px; font-size: .82rem; }
 </style>
 </head>
 <body>
@@ -367,6 +432,8 @@ details.step-list summary { cursor: pointer; margin-top: .5rem; color: var(--tex
   {% if not spotify_connected %}
   <p class="spotify-note">Spotify not connected. Check the terminal app.py was started from for the authorize link.</p>
   {% endif %}
+
+  {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
 
   <div class="toolbar">
     <form id="run-form" method="post" action="/run-checks">
@@ -388,7 +455,7 @@ details.step-list summary { cursor: pointer; margin-top: .5rem; color: var(--tex
   {% for heading, section_rows in sections %}
   <h2 class="section-heading">{{ heading }}</h2>
   {% for row in section_rows %}
-  <div class="row">
+  <div class="row" id="{{ row.id }}">
     <div class="row-top">
       <div>
         <div class="row-label">{{ row.label }}</div>
@@ -416,6 +483,30 @@ details.step-list summary { cursor: pointer; margin-top: .5rem; color: var(--tex
         </li>
         {% endfor %}
       </ul>
+    </details>
+    {% endif %}
+    {% if row.credentials %}
+    <details class="credentials">
+      <summary>{{ 'Edit API link' if row.credentials|rejectattr('url')|list|length == 0 else 'Edit credentials and API link' if row.credentials|selectattr('url')|list else 'Edit credentials' }}</summary>
+      {% if can_edit_credentials %}
+      <form class="credential-form" method="post" action="/credentials/{{ row.id }}" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {% for field in row.credentials %}
+        <label>
+          <span>{{ field.label }} <span class="field-state">({{ field.env }}{% if field.url %}{% if field.value != field.default.rstrip('/') %} - changed from the default{% endif %}{% else %} - {{ 'set' if field.is_set else 'not set' }}{% endif %})</span></span>
+          {% if field.url %}
+          <input name="{{ field.env }}" type="url" maxlength="512" spellcheck="false" value="{{ field.value }}" placeholder="{{ field.default }}">
+          {% else %}
+          <input name="{{ field.env }}" type="{{ 'password' if field.secret else 'text' }}" maxlength="512" spellcheck="false" placeholder="{{ 'Leave blank to keep the current value' if field.is_set else 'Not set yet' }}">
+          {% endif %}
+        </label>
+        {% endfor %}
+        <p class="hint">Blank fields keep their current value. Saving re-runs this check.</p>
+        <button type="submit">Save and re-check</button>
+      </form>
+      {% else %}
+      <p class="hint">Set WEB_USERNAME and WEB_PASSWORD to edit credentials from this page.</p>
+      {% endif %}
     </details>
     {% endif %}
   </div>

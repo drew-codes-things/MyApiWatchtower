@@ -2,6 +2,7 @@ import os
 
 from checks.probe import Probe, StepFailure, field, get_json, http, non_empty_list, require_fields
 from checks.result import not_configured, timed
+from checks.settings import configured_url
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p"
@@ -14,7 +15,7 @@ def run():
         return not_configured("TMDB_API_KEY is not set")
 
     def tmdb(path, **params):
-        return get_json(f"{TMDB_BASE}{path}", params={"api_key": api_key, **params})
+        return get_json(f"{configured_url('TMDB_API_URL', TMDB_BASE)}{path}", params={"api_key": api_key, **params})
 
     def configuration():
         body = tmdb("/configuration")

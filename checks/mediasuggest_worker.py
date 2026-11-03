@@ -1,5 +1,6 @@
 from checks.probe import Probe, StepFailure, get_json, require_fields
 from checks.result import timed
+from checks.settings import configured_url
 
 WORKER_URL = "https://api.drew-gnr.xyz/tmdb"
 POSTER_PREFIX = "https://image.tmdb.org/"
@@ -10,7 +11,7 @@ def run():
         params = {"type": media_type}
         if genres:
             params["genres"] = genres
-        body = get_json(WORKER_URL, params=params)
+        body = get_json(configured_url("MEDIASUGGEST_WORKER_URL", WORKER_URL), params=params)
         if body.get("error"):
             raise StepFailure(f"worker returned an error: {body['error']}")
         require_fields(body, "title", "year", "score", "genres", "desc", "poster", "type")

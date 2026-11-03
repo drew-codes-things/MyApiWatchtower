@@ -1,5 +1,6 @@
 from checks.probe import Probe, StepFailure, http, non_empty_list
 from checks.result import timed
+from checks.settings import configured_url
 
 ANILIST_URL = "https://graphql.anilist.co"
 ANILIST_QUERY = """
@@ -15,7 +16,7 @@ YEAR_TOLERANCE = 2
 
 
 def _anime_film_years(title):
-    response = http("POST", ANILIST_URL, json={"query": ANILIST_QUERY, "variables": {"search": title}}, timeout=8)
+    response = http("POST", configured_url("ANILIST_API_URL", ANILIST_URL), json={"query": ANILIST_QUERY, "variables": {"search": title}}, timeout=8)
     try:
         body = response.json()
     except ValueError as error:

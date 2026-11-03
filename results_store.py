@@ -19,3 +19,13 @@ def save_results(checked_at, results, trigger):
         with open(RESULTS_PATH, "w", encoding="utf-8") as file:
             json.dump(payload, file, indent=2)
     return payload
+
+
+def save_single_result(check_id, result, checked_at):
+    with _lock:
+        stored = load_results()
+        stored["results"][check_id] = result
+        stored["results"][check_id]["checked_at"] = checked_at
+        with open(RESULTS_PATH, "w", encoding="utf-8") as file:
+            json.dump(stored, file, indent=2)
+    return stored

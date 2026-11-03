@@ -2,8 +2,13 @@ import os
 
 from checks.probe import Probe, StepFailure, StepWarning, get_json, require_fields
 from checks.result import not_configured, timed
+from checks.settings import configured_url
 
 DISCORD_API = "https://discord.com/api/v10"
+
+
+def discord_api():
+    return configured_url("DISCORD_API_URL", DISCORD_API)
 LOW_SESSION_STARTS = 50
 MESSAGE_CONTENT_INTENT = 1 << 18
 MESSAGE_CONTENT_INTENT_LIMITED = 1 << 19
@@ -17,14 +22,14 @@ def _bot_steps(probe, token):
     headers = _bot_headers(token)
 
     def identity():
-        body = get_json(f"{DISCORD_API}/users/@me", headers=headers)
+        body = get_json(f"{discord_api()}/users/@me", headers=headers)
         require_fields(body, "id", "username")
         if not body.get("bot"):
             raise StepFailure("this token belongs to a user account, not a bot")
         return f"token accepted, bot '{body['username']}'"
 
     def gateway():
-        body = get_json(f"{DISCORD_API}/gateway/bot", headers=headers)
+        body = get_json(f"{discord_api()}/gateway/bot", headers=headers)
         require_fields(body, "url", "session_start_limit.remaining", "session_start_limit.reset_after")
         remaining = body["session_start_limit"]["remaining"]
         if remaining < LOW_SESSION_STARTS:
@@ -71,7 +76,7 @@ def run_reddit_relay():
             return "webhook alive, posting into the poller's channel"
 
         def message_content_intent():
-            body = get_json(f"{DISCORD_API}/applications/@me", headers=headers)
+            body = get_json(f"{discord_api()}/applications/@me", headers=headers)
             flags = body.get("flags", 0)
             if not flags & (MESSAGE_CONTENT_INTENT | MESSAGE_CONTENT_INTENT_LIMITED):
                 raise StepFailure("Message Content Intent is off, so the poller sees every RELAY: message "
@@ -79,7 +84,7 @@ def run_reddit_relay():
             return "Message Content Intent is on"
 
         def read_channel():
-            messages = get_json(f"{DISCORD_API}/channels/{channel_id}/messages", params={"limit": 20},
+            messages = get_json(f"{discord_api()}/channels/{channel_id}/messages", params={"limit": 20},
                                 headers=headers)
             relay_messages = [m for m in messages if (m.get("content") or "").startswith("RELAY:")]
             if messages and not any(m.get("content") for m in messages):

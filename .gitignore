@@ -9,3 +9,5 @@ results.json
 .cache
 venv/
 .venv/
+credentials.json
+credentials.json.tmp

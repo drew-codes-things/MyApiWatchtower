@@ -2,6 +2,7 @@ import time
 
 from checks.probe import Probe, StepFailure, get_json, http, non_empty_list, require_fields
 from checks.result import timed
+from checks.settings import configured_url
 
 YTS_LIST_MOVIES_URL = "https://movies-api.accel.li/api/v2/list_movies.json"
 YTS_MIRROR_URL = "https://yts.gg/api/v2/list_movies.json"
@@ -13,7 +14,7 @@ TORRENT_FIELDS = ("hash", "quality", "size", "size_bytes", "url", "video_codec")
 def _list_movies(**params):
     errors = []
     for attempt in range(len(RETRY_WAITS) + 1):
-        for url in (YTS_LIST_MOVIES_URL, YTS_MIRROR_URL):
+        for url in (configured_url("YTS_API_URL", YTS_LIST_MOVIES_URL), configured_url("YTS_MIRROR_URL", YTS_MIRROR_URL)):
             host = url.split("/")[2]
             try:
                 body = get_json(url, params=params, timeout=20)

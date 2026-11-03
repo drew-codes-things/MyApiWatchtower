@@ -4,6 +4,7 @@ from spotipy.oauth2 import SpotifyClientCredentials, SpotifyOAuth
 
 from checks.probe import Probe, StepFailure, get_json, non_empty_list, require_fields
 from checks.result import not_configured, timed
+from checks.settings import configured_url
 
 USER_OAUTH_SCOPES = "playlist-read-private playlist-read-collaborative user-read-private user-library-read"
 CACHE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".spotifyoauthcache")
@@ -25,7 +26,7 @@ def redirect_uri():
 
 def _api(token):
     def get(path, **params):
-        return get_json(f"{SPOTIFY_API}{path}", params=params, headers={"Authorization": f"Bearer {token}"})
+        return get_json(f"{configured_url('SPOTIFY_API_URL', SPOTIFY_API)}{path}", params=params, headers={"Authorization": f"Bearer {token}"})
     return get
 
 

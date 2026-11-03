@@ -3,6 +3,7 @@ import xml.etree.ElementTree as ElementTree
 
 from checks.probe import Probe, StepFailure, field, get_json, http, non_empty_list, require_fields
 from checks.result import timed
+from checks.settings import configured_url
 
 REDDIT_USER_AGENT = "linux:reddit-image-downloader:v1.0 (by /u/drew-gnr)"
 REDDIT_FEED_URL = "https://www.reddit.com/r/pics/.rss"
@@ -11,25 +12,35 @@ REDDIT_MEDIA_URL = re.compile(r"https?://(?:i|preview)\.redd\.it/[^\"' <>]+")
 
 ATSU_BASE = "https://atsu.moe"
 ATSU_CDN = "https://cdn.atsu.moe"
-ATSU_SITEMAP = f"{ATSU_BASE}/sitemap-manga.xml"
-ATSU_HEADERS = {
-    "User-Agent": "MyApiWatchtower/1.0",
-    "Referer": f"{ATSU_BASE}/",
-}
+ATSU_USER_AGENT = "MyApiWatchtower/1.0"
 
-DVD_HOME_URL = "https://www.dvdsreleasedates.com/"
-DVD_SEARCH_URL = "https://www.dvdsreleasedates.com/search/"
+DVD_HOME_URL = "https://www.dvdsreleasedates.com"
 DVD_USER_AGENT = "Mozilla/5.0"
-DVD_DETAIL_URL = re.compile(r"^https://www\.dvdsreleasedates\.com/movies/\d+/")
 DVD_MOVIE_LINK = re.compile(r"/movies/\d+/[^'\"]+")
 DVD_RESULT_LINK = re.compile(r"<a style='color:#000;' href='(/movies/\d+/[^']+)'>([^<]+)</a>")
 DVD_TITLE_YEAR = re.compile(
     r"<span itemprop='name'>(?P<title>.*?)</span>\s*\(<a class='(?:future|past)' href='/new-movies-(?P<year>\d{4})/'>")
 
 
+def atsu_base():
+    return configured_url("ATSU_URL", ATSU_BASE)
+
+
+def atsu_headers():
+    return {"User-Agent": ATSU_USER_AGENT, "Referer": f"{atsu_base()}/"}
+
+
+def dvd_home():
+    return configured_url("DVDSRELEASEDATES_URL", DVD_HOME_URL)
+
+
+def is_dvd_detail_page(url):
+    return re.match(re.escape(dvd_home()) + r"/movies/\d+/", url) is not None
+
+
 def run_reddit_rss():
     def feed():
-        response = http("GET", REDDIT_FEED_URL, headers={"User-Agent": REDDIT_USER_AGENT}, timeout=45)
+        response = http("GET", configured_url("REDDIT_FEED_URL", REDDIT_FEED_URL), headers={"User-Agent": REDDIT_USER_AGENT}, timeout=45)
         try:
             root = ElementTree.fromstring(response.content)
         except ElementTree.ParseError as error:
@@ -68,10 +79,10 @@ def run_reddit_rss():
 
 def run_atsu():
     def atsu(path, **params):
-        return get_json(f"{ATSU_BASE}{path}", params=params, headers=ATSU_HEADERS)
+        return get_json(f"{atsu_base()}{path}", params=params, headers=atsu_headers())
 
     def sample_manga():
-        response = http("GET", ATSU_SITEMAP, headers=ATSU_HEADERS)
+        response = http("GET", f"{atsu_base()}/sitemap-manga.xml", headers=atsu_headers())
         match = re.search(r"atsu\.moe/manga/([A-Za-z0-9_-]+)", response.text)
         if not match:
             raise StepFailure("the manga sitemap lists no manga, so there's nothing to test against")
@@ -99,7 +110,7 @@ def run_atsu():
         return f"{len(pages)} pages", image
 
     def page_image(image_path):
-        response = http("GET", f"{ATSU_CDN}{image_path}", headers=ATSU_HEADERS, stream=True)
+        response = http("GET", f"{ATSU_CDN}{image_path}", headers=atsu_headers(), stream=True)
         content_type = response.headers.get("Content-Type", "")
         response.close()
         if not content_type.startswith("image/"):
@@ -123,11 +134,11 @@ def run_atsu():
 
 def run_dvdsreleasedates():
     def search(title):
-        return http("POST", DVD_SEARCH_URL, data={"searchStr": title}, headers={"User-Agent": DVD_USER_AGENT})
+        return http("POST", f"{dvd_home()}/search/", data={"searchStr": title}, headers={"User-Agent": DVD_USER_AGENT})
 
     def exact_match():
         response = search("Inception")
-        if not DVD_DETAIL_URL.match(response.url):
+        if not is_dvd_detail_page(response.url):
             raise StepFailure(f"an exact title no longer redirects to a /movies/ page (landed on {response.url})")
         heading = re.search(r"<h2>(.*?)</h2>", response.text, re.DOTALL)
         if not heading:
@@ -138,11 +149,11 @@ def run_dvdsreleasedates():
         return f"redirected to the detail page, release status '{status.group(1)}'"
 
     def upcoming_title_year():
-        home = http("GET", DVD_HOME_URL, headers={"User-Agent": DVD_USER_AGENT})
+        home = http("GET", dvd_home() + "/", headers={"User-Agent": DVD_USER_AGENT})
         link = DVD_MOVIE_LINK.search(home.text)
         if not link:
             raise StepFailure("the homepage lists no /movies/ links to test with")
-        detail = http("GET", DVD_HOME_URL.rstrip("/") + link.group(0), headers={"User-Agent": DVD_USER_AGENT})
+        detail = http("GET", dvd_home() + link.group(0), headers={"User-Agent": DVD_USER_AGENT})
         title_year = DVD_TITLE_YEAR.search(detail.text)
         if not title_year:
             raise StepFailure(f"the title/year markup on {link.group(0)} changed, so YtsSearch can't read the year")
@@ -150,7 +161,7 @@ def run_dvdsreleasedates():
 
     def results_list():
         response = search("Batman")
-        if DVD_DETAIL_URL.match(response.url):
+        if is_dvd_detail_page(response.url):
             raise StepFailure("a vague search jumped to one film, so the results-list parsing can't be tested")
         start = response.text.find("Search results for")
         if start == -1:
