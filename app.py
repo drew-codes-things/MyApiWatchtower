@@ -5,7 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from functools import wraps
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -24,7 +24,7 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 apply_saved_credentials()
 
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(32)
+app.secret_key = (os.getenv("SECRET_KEY") or "").strip() or secrets.token_hex(32)
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = (os.getenv("SESSION_COOKIE_SECURE") or "false").strip().lower() == "true"
 
@@ -42,13 +42,21 @@ def auth_enabled():
     return bool(WEB_USERNAME and WEB_PASSWORD)
 
 
+def viewer_is_authenticated():
+    if not auth_enabled():
+        return False
+    auth = request.authorization
+    return bool(
+        auth
+        and secrets.compare_digest(auth.username or "", WEB_USERNAME)
+        and secrets.compare_digest(auth.password or "", WEB_PASSWORD)
+    )
+
+
 def requires_auth(view_func):
     @wraps(view_func)
     def wrapped(*args, **kwargs):
-        if not auth_enabled():
-            return view_func(*args, **kwargs)
-        auth = request.authorization
-        if auth and secrets.compare_digest(auth.username or "", WEB_USERNAME) and secrets.compare_digest(auth.password or "", WEB_PASSWORD):
+        if not auth_enabled() or viewer_is_authenticated():
             return view_func(*args, **kwargs)
         return Response(
             "Authentication required",
@@ -219,6 +227,23 @@ def checks_for_template():
     return rows, stored.get("checked_at"), stored.get("trigger")
 
 
+def hide_url(text, url):
+    if not text or not url:
+        return text
+    host = urlsplit(url).hostname or "the service"
+    return text.replace(url, host).replace(url.rstrip("/"), host)
+
+
+def redact_row_urls(row):
+    urls = [field["value"] for field in row["credentials"] if field.get("url") and field.get("value")]
+    if row["service"]:
+        urls.append(row["service"]["url"])
+    for url in urls:
+        row["message"] = hide_url(row["message"], url)
+        row["steps"] = [{**step, "name": hide_url(step.get("name"), url), "detail": hide_url(step.get("detail"), url)} for step in row["steps"]]
+    return row
+
+
 def describe_checked_at(checked_at, trigger):
     if not checked_at:
         return None
@@ -236,6 +261,9 @@ def health():
 def index():
     rows, checked_at, trigger = checks_for_template()
     next_run = _schedule_state["next_run"]
+    signed_in = viewer_is_authenticated()
+    if not signed_in:
+        rows = [redact_row_urls(row) for row in rows]
     return render_template_string(
         PAGE_TEMPLATE,
         sections=sections_for(rows),
@@ -243,9 +271,17 @@ def index():
         next_run=f"{next_run:%a %d %b, %H:%M}" if next_run else None,
         notes=plugin_notes(),
         csrf_token=get_csrf_token(),
-        can_edit_credentials=auth_enabled(),
+        can_edit_credentials=signed_in,
+        auth_configured=auth_enabled(),
+        can_sign_in=auth_enabled() and not signed_in,
         notice=request.args.get("notice", ""),
     )
+
+
+@app.route("/login")
+@requires_auth
+def login():
+    return redirect("/")
 
 
 @app.route("/run-checks", methods=["POST"])
@@ -455,6 +491,8 @@ p.subtitle { color: var(--text-dim); }
 p.plugin-note { color: var(--text-faint); font-family: var(--sans); font-size: .8rem; }
 h2.section-heading { font-family: var(--sans); font-size: 1rem; font-weight: 500; color: var(--text); border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-top: 2.5rem; }
 .toolbar { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 1.5rem 0; }
+.sign-in { margin-left: auto; font-size: 0.9rem; color: var(--muted, #8a8f98); text-decoration: underline; }
+.sign-in:hover { color: inherit; }
 button {
   display: inline-flex; align-items: center; gap: .4em;
   font-family: var(--sans); background: linear-gradient(135deg, var(--signal), #7a0f14); border: 1px solid transparent; color: #fff;
@@ -541,6 +579,7 @@ details.add-service > summary { cursor: pointer; font-weight: 500; }
     <span class="checked-at">Never run yet</span>
     {% endif %}
     {% if next_run %}<span class="checked-at">Next automatic run {{ next_run }}</span>{% endif %}
+    {% if can_sign_in %}<a class="sign-in" href="/login">Sign in to edit</a>{% endif %}
   </div>
 
   {% if can_edit_credentials %}
@@ -634,6 +673,8 @@ details.add-service > summary { cursor: pointer; font-weight: 500; }
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-actions"><button type="submit" class="button-quiet">Remove this service</button><span class="hint">Removing deletes its settings and last result.</span></div>
       </form>
+      {% elif auth_configured %}
+      <p class="hint"><a href="/login">Sign in</a> to edit services from this page.</p>
       {% else %}
       <p class="hint">Set WEB_USERNAME and WEB_PASSWORD to edit services from this page.</p>
       {% endif %}
@@ -657,6 +698,8 @@ details.add-service > summary { cursor: pointer; font-weight: 500; }
         <p class="hint">Blank fields keep their current value. Saving re-runs this check.</p>
         <button type="submit">Save and re-check</button>
       </form>
+      {% elif auth_configured %}
+      <p class="hint"><a href="/login">Sign in</a> to edit credentials from this page.</p>
       {% else %}
       <p class="hint">Set WEB_USERNAME and WEB_PASSWORD to edit credentials from this page.</p>
       {% endif %}
@@ -672,11 +715,15 @@ details.add-service > summary { cursor: pointer; font-weight: 500; }
 """
 
 
-if __name__ == "__main__":
-    host = os.getenv("BIND_HOST", "127.0.0.1")
-    port = int(os.getenv("PORT", "5002"))
+def create_app():
     if not auth_enabled():
         print("WARNING: WEB_USERNAME/WEB_PASSWORD not set; the Run checks button is unauthenticated.", flush=True)
     setup_plugins(app)
     start_daily_schedule()
-    app.run(host=host, port=port, threaded=True)
+    return app
+
+
+if __name__ == "__main__":
+    host = os.getenv("BIND_HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "5002"))
+    create_app().run(host=host, port=port, threaded=True)

@@ -60,7 +60,7 @@ def test_unknown_checks_are_refused(client):
 
 def test_secrets_are_never_written_into_the_page(client, monkeypatch):
     monkeypatch.setenv("DEMO_API_KEY", "very-secret-value")
-    page = client.get("/").data.decode()
+    page = client.get("/", headers=LOGIN).data.decode()
     assert "very-secret-value" not in page and "DEMO_API_KEY - set" in page
 
 
@@ -95,6 +95,6 @@ def test_bad_links_are_refused(client, tmp_path, link):
 
 def test_checks_without_settings_have_no_edit_panel(client):
     assert client.post("/credentials/plain", headers=LOGIN, data={"csrf_token": csrf_token(client)}).status_code == 404
-    page = client.get("/").data.decode()
+    page = client.get("/", headers=LOGIN).data.decode()
     assert 'action="/credentials/demo"' in page and 'action="/credentials/plain"' not in page
     assert f'value="{DEMO_URL}"' in page

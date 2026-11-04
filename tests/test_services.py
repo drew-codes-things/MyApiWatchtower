@@ -28,7 +28,7 @@ def test_a_service_can_be_added_and_is_checked_straight_away(client, tmp_path):
     [service] = saved(tmp_path)
     assert service["name"] == "Status page" and service["tags"] == ["homelab", "api"]
     assert stat.S_IMODE((tmp_path / "services.json").stat().st_mode) == 0o600
-    page = client.get("/").data.decode()
+    page = client.get("/", headers=LOGIN).data.decode()
     assert "Your services" in page and "Status page" in page and f'action="/services/{service["id"]}/delete"' in page
 
 
@@ -45,7 +45,7 @@ def test_the_secret_header_is_sent_but_never_shown(client, tmp_path):
     responses.add(responses.GET, API, status=200)
     add(client, header_name="Authorization", header_value="Bearer hidden-value")
     assert responses.calls[0].request.headers["Authorization"] == "Bearer hidden-value"
-    page = client.get("/").data.decode()
+    page = client.get("/", headers=LOGIN).data.decode()
     assert "hidden-value" not in page and "secret - set" in page
 
 
@@ -134,3 +134,16 @@ def test_alerts_go_to_the_discord_webhook_when_set(monkeypatch):
     monkeypatch.setenv("DISCORD_ALERT_WEBHOOK_URL", hook)
     assert alerts.send_alert(["🔴 API A is failing"]) is True
     assert json.loads(responses.calls[0].request.body)["content"].endswith("🔴 API A is failing")
+
+
+@responses.activate
+def test_anonymous_viewers_see_status_but_not_urls(client, tmp_path):
+    responses.add(responses.GET, API, status=200)
+    add(client)
+    page = client.get("/").data.decode()
+    assert "Status page" in page and 'href="/login"' in page
+    assert API not in page and 'action="/services"' not in page
+    assert client.get("/login").status_code == 401
+    assert client.get("/login", headers=LOGIN).status_code == 302
+    signed_in = client.get("/", headers=LOGIN).data.decode()
+    assert API in signed_in and "Sign in to edit" not in signed_in

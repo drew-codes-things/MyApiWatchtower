@@ -49,7 +49,21 @@ cp .env.example .env
 python app.py
 ```
 
-Set `WEB_USERNAME`/`WEB_PASSWORD` in `.env`, open `http://127.0.0.1:5002`, and use **Add a service**. Services are saved to `services.json` next to `app.py` (owner-only permissions, git-ignored).
+Set `WEB_USERNAME`/`WEB_PASSWORD` in `.env`, open `http://127.0.0.1:5002`, click **Sign in to edit**, and use **Add a service**. Services are saved to `services.json` next to `app.py` (owner-only permissions, git-ignored).
+
+The status rows are public, but the edit panels (which show each service's URL and the plugin API links) only render for a signed-in viewer, so anyone who can reach the page sees names and statuses, not where things live.
+
+### Running it for real
+
+`python app.py` uses Flask's development server, which is fine on a laptop. For anything that stays up, run it under gunicorn (already in `requirements.txt`):
+
+```bash
+gunicorn --workers 1 --threads 8 --bind 127.0.0.1:5002 'app:create_app()'
+```
+
+Keep `--workers 1`: the run-progress state and the daily schedule live in memory, so extra workers would run the checks several times. Put it behind an HTTPS reverse proxy (Caddy, nginx) and set `SESSION_COOKIE_SECURE=true`; Basic auth over plain HTTP sends the password in the clear.
+
+Set `SECRET_KEY` to any long random string as well (for example `python -c "import secrets; print(secrets.token_hex(32))"`). Without it a fresh key is generated on every start, which invalidates open sessions and their CSRF tokens whenever the app restarts.
 
 `DAILY_RUN_AT` (default in `.env.example`: `05:30,17:30`) runs every check automatically at each listed time, every day, in `SCHEDULE_TIMEZONE` (default `Europe/London`). Give one time (`05:30`) for once a day, or several separated by commas. Leave it empty to only run checks by hand.
 
