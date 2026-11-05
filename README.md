@@ -10,6 +10,8 @@
 
 </div>
 
+![MyApiWatchtower's status page with two passing and two failing services](screenshot.png)
+
 ---
 
 ## What it does
