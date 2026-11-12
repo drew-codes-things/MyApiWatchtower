@@ -1,4 +1,4 @@
-from checks.probe import Probe, StepFailure, http
+from checks.probe import Probe, StepFailure, describe_origin, http
 from checks.result import timed
 from services_store import expected_status_codes
 
@@ -17,7 +17,7 @@ def run_service(service):
                             headers=headers, timeout=service.get("timeout"), allow_redirects=True)
             return f"HTTP {response.status_code}", response
 
-        response = probe.step(f"{service['method']} {service['url']}", request)
+        response = probe.step(f"{service['method']} {describe_origin(service['url'])}", request)
         if service.get("contains"):
             def body_contains():
                 if service["contains"] not in response.text:

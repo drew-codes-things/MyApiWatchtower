@@ -1,5 +1,6 @@
 import re
 import time
+from urllib.parse import urlsplit
 
 import requests
 
@@ -47,23 +48,48 @@ def describe_status(response):
     return text
 
 
-def describe_request_error(error):
+def describe_origin(url):
+    parts = urlsplit(url or "")
+    try:
+        host = parts.hostname
+    except ValueError:
+        host = None
+    if not parts.scheme or not host:
+        return "the service"
+    return f"{parts.scheme}://{host}"
+
+
+def describe_connection_error(error, origin):
+    text = str(error)
+    if "Name or service not known" in text or "NameResolutionError" in text or "getaddrinfo" in text:
+        return f"DNS lookup failed - the hostname doesn't resolve ({origin})"
+    if "Connection refused" in text:
+        return f"connection refused - nothing is listening ({origin})"
+    if "Network is unreachable" in text or "timed out" in text:
+        return f"could not reach the server at all (it's down, or blocking this network) ({origin})"
+    return f"could not connect to {origin}"
+
+
+def describe_request_error(error, url=None):
+    origin = describe_origin(url)
     if isinstance(error, requests.exceptions.SSLError):
-        return f"TLS/certificate error: {error}"
+        return f"TLS/certificate error talking to {origin}"
+    if isinstance(error, requests.exceptions.ProxyError):
+        return f"the proxy failed while connecting to {origin}"
     if isinstance(error, requests.exceptions.ConnectTimeout):
-        return "timed out connecting"
+        return f"timed out connecting to {origin}"
     if isinstance(error, requests.exceptions.ReadTimeout):
-        return "connected, but timed out waiting for a response"
+        return f"connected to {origin}, but timed out waiting for a response"
     if isinstance(error, requests.exceptions.ConnectionError):
-        text = str(error)
-        if "Name or service not known" in text or "NameResolutionError" in text or "getaddrinfo" in text:
-            return "DNS lookup failed - the hostname doesn't resolve"
-        if "Connection refused" in text:
-            return "connection refused - nothing is listening"
-        if "Network is unreachable" in text or "timed out" in text:
-            return "could not reach the server at all (it's down, or blocking this network)"
-        return f"could not connect: {text}"
-    return f"request failed: {error}"
+        return describe_connection_error(error, origin)
+    if isinstance(error, requests.exceptions.TooManyRedirects):
+        return f"too many redirects from {origin}"
+    if isinstance(error, (requests.exceptions.InvalidURL, requests.exceptions.MissingSchema,
+                          requests.exceptions.InvalidSchema, requests.exceptions.URLRequired)):
+        return "the URL is not valid"
+    if isinstance(error, (requests.exceptions.ChunkedEncodingError, requests.exceptions.ContentDecodingError)):
+        return f"the response from {origin} was cut off or could not be decoded"
+    return f"request to {origin} failed ({type(error).__name__})"
 
 
 def http(method, url, *, expect=(200,), **kwargs):
@@ -71,7 +97,7 @@ def http(method, url, *, expect=(200,), **kwargs):
     try:
         response = requests.request(method, url, **kwargs)
     except requests.RequestException as error:
-        raise StepFailure(describe_request_error(error)) from error
+        raise StepFailure(describe_request_error(error, url)) from error
     if response.status_code not in expect:
         raise StepFailure(describe_status(response))
     return response
