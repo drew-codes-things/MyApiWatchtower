@@ -2,8 +2,6 @@ from checks.probe import Probe, StepFailure, describe_origin, http
 from checks.result import timed
 from services_store import expected_status_codes
 
-PREVIEW_LENGTH = 80
-
 
 def run_service(service):
     header_value = service.get("header_value", "")
@@ -21,8 +19,7 @@ def run_service(service):
         if service.get("contains"):
             def body_contains():
                 if service["contains"] not in response.text:
-                    preview = response.text[:PREVIEW_LENGTH].replace("\n", " ")
-                    raise StepFailure(f"the response doesn't contain {service['contains']!r} (it starts {preview!r})")
+                    raise StepFailure(f"the response doesn't contain {service['contains']!r}")
                 return f"found {service['contains']!r}"
 
             probe.step("Response contains the expected text", body_contains, needs=[("a response", response)])
