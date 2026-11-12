@@ -28,7 +28,7 @@ Each service can be edited or removed from its row. Saving or adding a service c
 
 When `DISCORD_ALERT_WEBHOOK_URL` is set, a full run posts to that Discord webhook whenever a service starts failing or comes back, and stays quiet otherwise.
 
-The results page is public and read-only. Running checks and adding, editing or removing services all need the login from `WEB_USERNAME`/`WEB_PASSWORD`; without one set, the page can't be changed from the browser at all.
+The results page is public and read-only. Running checks and adding, editing or removing services all need the login from `WEB_USERNAME`/`WEB_PASSWORD`. Without one set, services and settings can't be changed from the browser at all, but anyone who can reach the page can press **Run checks** (the app warns about this at startup).
 
 ## Plugins: deeper checks in Python
 
