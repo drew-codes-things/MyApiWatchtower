@@ -607,6 +607,11 @@ details.add-service[open] > summary { margin-bottom: 4px; }
   .credential-form input, .credential-form select { font-size: 16px; }
   details > summary { padding-block: 10px; }
 }
+@media (max-width: 820px), (pointer: coarse) {
+  .credential-form input, .credential-form select { font-size: 16px; }
+  button, .credential-form input, .credential-form select { min-height: 44px; }
+  details.add-service > summary { padding-block: 10px; }
+}
 </style>
 </head>
 <body>
