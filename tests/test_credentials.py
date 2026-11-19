@@ -47,11 +47,11 @@ def test_editing_needs_the_login_and_a_csrf_token(client):
     assert client.post("/credentials/demo", headers=LOGIN, data={"csrf_token": "wrong", "DEMO_API_KEY": "x"}).status_code == 403
 
 
-def test_editing_is_refused_when_no_login_is_configured(client, monkeypatch):
+def test_without_a_basic_login_the_own_sign_in_guards_editing(client, monkeypatch):
     monkeypatch.setattr(watchtower, "WEB_USERNAME", "")
     response = client.post("/credentials/demo", data={"csrf_token": csrf_token(client), "DEMO_API_KEY": "x"})
-    assert response.status_code == 403
-    assert b"Set WEB_USERNAME and WEB_PASSWORD" in client.get("/").data
+    assert response.status_code == 401
+    assert b'<a href="/login">Sign in</a> to edit credentials' in client.get("/").data
 
 
 def test_unknown_checks_are_refused(client):

@@ -5,6 +5,8 @@ import types
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+os.environ.setdefault("SECRET_KEY", "watchtower-tests-" + "k" * 32)
+
 import pytest
 
 import app as watchtower

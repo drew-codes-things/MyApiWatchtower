@@ -91,7 +91,7 @@ def test_bad_service_details_are_refused(client, tmp_path, fields, message):
 def test_services_need_the_login(client, monkeypatch):
     assert client.post("/services", data={"csrf_token": csrf_token(client), "name": "x", "url": API}).status_code == 401
     monkeypatch.setattr("app.WEB_USERNAME", "")
-    assert client.post("/services", data={"csrf_token": csrf_token(client), "name": "x", "url": API}).status_code == 403
+    assert client.post("/services", data={"csrf_token": csrf_token(client), "name": "x", "url": API}).status_code == 401
 
 
 def test_a_fresh_install_watches_nothing(client, monkeypatch):
