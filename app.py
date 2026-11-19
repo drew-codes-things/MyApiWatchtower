@@ -1,5 +1,8 @@
+import contextlib
+import ipaddress
 import os
 import secrets
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -9,7 +12,7 @@ from urllib.parse import quote, urlsplit
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from flask import Flask, Response, jsonify, redirect, render_template_string, request, session
+from flask import Flask, Response, abort, jsonify, redirect, render_template_string, request, session
 
 from alerts import send_alert, status_changes
 from checks.result import fail
@@ -18,6 +21,7 @@ from credentials_store import InvalidCredential, apply_saved_credentials, clean_
 from registry import all_checks, credentials_for, get_check, plugin_notes, section_title, setup_plugins
 from results_store import load_results, remove_result, save_results, save_single_result
 from services_store import InvalidService, delete_service, get_service, save_service, service_from_form
+from signin import SIGN_IN_PATHS, OwnerAccount, PasswordAuth, add_sign_in_pages
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -30,6 +34,15 @@ app.config["SESSION_COOKIE_SECURE"] = (os.getenv("SESSION_COOKIE_SECURE") or "fa
 
 WEB_USERNAME = (os.getenv("WEB_USERNAME") or "").strip()
 WEB_PASSWORD = (os.getenv("WEB_PASSWORD") or "").strip()
+ALLOW_INSECURE = (os.getenv("ALLOW_INSECURE") or "false").strip().lower() == "true"
+SECURE_COOKIE_CHOICES = ("auto", "true", "false")
+OWN_SESSION_COOKIE = "watchtower_session"
+OWNER_FILE_NAME = "owner.json"
+SECRET_FILE_NAME = "secret_key"
+SECRET_BYTES = 32
+MISDIRECTED_REQUEST = 421
+WRONG_HOST_TEXT = ("MyApiWatchtower does not answer on that host name: it answers on the names in ALLOWED_HOSTS, "
+                   "or with it empty on localhost, IP addresses and this machine's name.")
 DAILY_RUN_AT = (os.getenv("DAILY_RUN_AT") or "").strip()
 SCHEDULE_TIMEZONE = ZoneInfo((os.getenv("SCHEDULE_TIMEZONE") or "Europe/London").strip())
 
@@ -42,9 +55,108 @@ def auth_enabled():
     return bool(WEB_USERNAME and WEB_PASSWORD)
 
 
-def viewer_is_authenticated():
-    if not auth_enabled():
-        return False
+def sign_in_method():
+    if auth_enabled():
+        return "basic"
+    if ALLOW_INSECURE:
+        return "proxy"
+    return "builtin"
+
+
+def read_secure_cookies():
+    choice = (os.getenv("SECURE_COOKIES") or "auto").strip().lower()
+    if choice not in SECURE_COOKIE_CHOICES:
+        raise SystemExit(f"SECURE_COOKIES must be one of {', '.join(SECURE_COOKIE_CHOICES)}, got {choice!r}")
+    return choice
+
+
+def read_list(name):
+    return tuple(part.strip() for part in (os.getenv(name) or "").split(",") if part.strip())
+
+
+def has_host_bits(entry):
+    try:
+        ipaddress.ip_network(entry, strict=True)
+    except ValueError:
+        return True
+    return False
+
+
+def read_trusted_proxies():
+    if sign_in_method() != "builtin":
+        return ()
+    entries = read_list("TRUSTED_PROXIES")
+    for entry in entries:
+        try:
+            network = ipaddress.ip_network(entry, strict=False)
+        except ValueError as error:
+            raise SystemExit(f"TRUSTED_PROXIES has {entry!r}, which is not an address or network") from error
+        if has_host_bits(entry):
+            raise SystemExit(f"TRUSTED_PROXIES has {entry!r}, which has host bits set; write {network} for the network "
+                             f"or {entry.split('/')[0]} for one address")
+        if network.num_addresses > 1 and not network.is_private:
+            raise SystemExit(f"TRUSTED_PROXIES has {entry!r}, which reaches public addresses; list the proxy's own address "
+                             "or a private network")
+    return entries
+
+
+def usable_secret(secret, source):
+    if len(secret) < SECRET_BYTES:
+        raise SystemExit(f"{source} holds {len(secret)} bytes, fewer than the {SECRET_BYTES} the sign-in key needs; "
+                         "set a longer SECRET_KEY, or stop the app, delete the secret_key file and start it again")
+    return secret
+
+
+def save_secret_file_unless_present(path):
+    folder = os.path.dirname(path)
+    os.makedirs(folder, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=".secret-", dir=folder)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(secrets.token_hex(SECRET_BYTES).encode())
+        with contextlib.suppress(FileExistsError):
+            os.link(temporary, path)
+    finally:
+        os.unlink(temporary)
+
+
+def load_or_create_secret_file(path):
+    if not os.path.exists(path):
+        save_secret_file_unless_present(path)
+    with open(path, "rb") as handle:
+        return usable_secret(handle.read(), path)
+
+
+def sign_in_secret():
+    if sign_in_method() != "builtin":
+        return secrets.token_hex(SECRET_BYTES).encode()
+    configured = (os.getenv("SECRET_KEY") or "").strip()
+    if configured:
+        return usable_secret(configured.encode(), "SECRET_KEY")
+    return load_or_create_secret_file(os.path.join(BASE_DIR, SECRET_FILE_NAME))
+
+
+OWN_SIGN_IN = PasswordAuth(OwnerAccount(os.path.join(BASE_DIR, OWNER_FILE_NAME)), sign_in_secret(),
+                           OWN_SESSION_COOKIE, read_secure_cookies(), read_list("ALLOWED_HOSTS"),
+                           trusted_proxies=read_trusted_proxies())
+add_sign_in_pages(app, OWN_SIGN_IN, "MyApiWatchtower")
+
+
+@app.before_request
+def hide_sign_in_pages_unless_used():
+    if request.path in SIGN_IN_PATHS and sign_in_method() != "builtin":
+        abort(404)
+    return None
+
+
+@app.before_request
+def refuse_foreign_host_names():
+    if sign_in_method() != "basic" and not OWN_SIGN_IN.accepts_host(request.host):
+        return Response(WRONG_HOST_TEXT, status=MISDIRECTED_REQUEST, mimetype="text/plain")
+    return None
+
+
+def has_basic_login():
     auth = request.authorization
     return bool(
         auth
@@ -53,11 +165,28 @@ def viewer_is_authenticated():
     )
 
 
+def viewer_is_authenticated():
+    method = sign_in_method()
+    if method == "proxy":
+        return True
+    if method == "builtin":
+        return OWN_SIGN_IN.user_for(request.remote_addr or "", request.headers) is not None
+    return has_basic_login()
+
+
+def refuse_signed_out_visitor():
+    if request.method == "GET" and request.path == "/login":
+        return redirect(OWN_SIGN_IN.entry_path(), code=303)
+    return Response("Sign in first.", status=401, mimetype="text/plain")
+
+
 def requires_auth(view_func):
     @wraps(view_func)
     def wrapped(*args, **kwargs):
-        if not auth_enabled() or viewer_is_authenticated():
+        if viewer_is_authenticated():
             return view_func(*args, **kwargs)
+        if sign_in_method() == "builtin":
+            return refuse_signed_out_visitor()
         return Response(
             "Authentication required",
             status=401,
@@ -272,8 +401,10 @@ def index():
         notes=plugin_notes(),
         csrf_token=get_csrf_token(),
         can_edit_credentials=signed_in,
-        auth_configured=auth_enabled(),
-        can_sign_in=auth_enabled() and not signed_in,
+        can_run_checks=signed_in or sign_in_method() == "basic",
+        auth_configured=sign_in_method() != "proxy",
+        can_sign_in=sign_in_method() != "proxy" and not signed_in,
+        can_sign_out=sign_in_method() == "builtin" and signed_in,
         notice=request.args.get("notice", ""),
     )
 
@@ -314,8 +445,6 @@ def credential_updates(check, form):
 
 
 def editing_refused():
-    if not auth_enabled():
-        return Response("Set WEB_USERNAME and WEB_PASSWORD before editing from the page", status=403)
     if not has_valid_csrf(request.form.get("csrf_token")):
         return Response("Invalid CSRF token", status=403)
     return None
@@ -416,13 +545,13 @@ RUN_PROGRESS_JS = """
     if (data.active) {
       wasActive = true;
       wrap.classList.add('active');
-      btn.disabled = true;
+      if (btn) btn.disabled = true;
       const pct = data.total ? Math.round((data.completed / data.total) * 100) : 0;
       fill.style.width = pct + '%';
       label.textContent = 'Running checks ' + data.completed + '/' + data.total;
     } else {
       wrap.classList.remove('active');
-      btn.disabled = false;
+      if (btn) btn.disabled = false;
       if (wasActive) {
         wasActive = false;
         window.location.reload();
@@ -627,10 +756,12 @@ details.add-service[open] > summary { margin-bottom: 4px; }
   {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
 
   <div class="toolbar">
+    {% if can_run_checks %}
     <form id="run-form" method="post" action="/run-checks">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button id="run-btn" type="submit">Run checks</button>
     </form>
+    {% endif %}
     <div id="run-progress-wrap" class="progress-wrap">
       <div class="progress-track"><div id="run-progress-fill" class="progress-fill"></div></div>
       <span id="run-progress-label">Running checks 0/0</span>
@@ -642,6 +773,7 @@ details.add-service[open] > summary { margin-bottom: 4px; }
     {% endif %}
     {% if next_run %}<span class="checked-at">Next automatic run {{ next_run }}</span>{% endif %}
     {% if can_sign_in %}<a class="sign-in" href="/login">Sign in to edit</a>{% endif %}
+    {% if can_sign_out %}<a class="sign-in" href="/signout">Sign out</a>{% endif %}
   </div>
 
   {% if can_edit_credentials %}
@@ -671,7 +803,7 @@ details.add-service[open] > summary { margin-bottom: 4px; }
   {% endif %}
 
   {% if not sections %}
-  <p class="empty-state">Nothing is being watched yet. {% if can_edit_credentials %}Use <strong>Add a service</strong> above to add the first one.{% else %}Set WEB_USERNAME and WEB_PASSWORD, then add services from this page.{% endif %}</p>
+  <p class="empty-state">Nothing is being watched yet. {% if can_edit_credentials %}Use <strong>Add a service</strong> above to add the first one.{% else %}<a href="/login">Sign in</a> to add services from this page.{% endif %}</p>
   {% endif %}
 
   {% for heading, section_rows in sections %}
@@ -737,8 +869,6 @@ details.add-service[open] > summary { margin-bottom: 4px; }
       </form>
       {% elif auth_configured %}
       <p class="hint"><a href="/login">Sign in</a> to edit services from this page.</p>
-      {% else %}
-      <p class="hint">Set WEB_USERNAME and WEB_PASSWORD to edit services from this page.</p>
       {% endif %}
     </details>
     {% elif row.credentials %}
@@ -762,8 +892,6 @@ details.add-service[open] > summary { margin-bottom: 4px; }
       </form>
       {% elif auth_configured %}
       <p class="hint"><a href="/login">Sign in</a> to edit credentials from this page.</p>
-      {% else %}
-      <p class="hint">Set WEB_USERNAME and WEB_PASSWORD to edit credentials from this page.</p>
       {% endif %}
     </details>
     {% endif %}
@@ -778,8 +906,12 @@ details.add-service[open] > summary { margin-bottom: 4px; }
 
 
 def create_app():
-    if not auth_enabled():
-        print("WARNING: WEB_USERNAME/WEB_PASSWORD not set; the Run checks button is unauthenticated.", flush=True)
+    method = sign_in_method()
+    if method == "proxy":
+        print("ALLOW_INSECURE=true: MyApiWatchtower has no sign-in of its own; the proxy in front must sign people in.",
+              flush=True)
+    if method == "builtin" and OWN_SIGN_IN.needs_setup():
+        OWN_SIGN_IN.setup_code()
     setup_plugins(app)
     start_daily_schedule()
     return app

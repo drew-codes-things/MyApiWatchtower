@@ -28,7 +28,7 @@ Each service can be edited or removed from its row. Saving or adding a service c
 
 When `DISCORD_ALERT_WEBHOOK_URL` is set, a full run posts to that Discord webhook whenever a service starts failing or comes back, and stays quiet otherwise.
 
-The results page is public and read-only. Running checks and adding, editing or removing services all need the login from `WEB_USERNAME`/`WEB_PASSWORD`. Without one set, services and settings can't be changed from the browser at all, but anyone who can reach the page can press **Run checks** (the app warns about this at startup).
+The results page is public and read-only. Running checks and adding, editing or removing services all need a sign-in: the app's own owner account by default (see [First run and sign-in](#first-run-and-sign-in)), or HTTP Basic Auth when `WEB_USERNAME`/`WEB_PASSWORD` are set.
 
 ## Plugins: deeper checks in Python
 
@@ -51,9 +51,60 @@ cp .env.example .env
 python app.py
 ```
 
-Set `WEB_USERNAME`/`WEB_PASSWORD` in `.env`, open `http://127.0.0.1:5002`, click **Sign in to edit**, and use **Add a service**. Services are saved to `services.json` next to `app.py` (owner-only permissions, git-ignored).
+Open `http://127.0.0.1:5002`, click **Sign in to edit**, make the owner account (below) and use **Add a service**. Services are saved to `services.json` next to `app.py` (owner-only permissions, git-ignored).
 
 The status rows are public, but the edit panels (which show each service's URL and the plugin API links) only render for a signed-in viewer, so anyone who can reach the page sees names and statuses, not where things live.
+
+### First run and sign-in
+
+MyApiWatchtower has its own sign-in, switched on by default (see "Other ways to sign in" below for the
+alternatives). There is one owner account and no sign-up page. The status rows stay public; the owner account is
+what runs checks and edits services and credentials.
+
+1. Start it (`python app.py`) and open `http://127.0.0.1:5002`, then **Sign in to edit**. With no account yet that
+   goes to **Set up**.
+2. The app writes a one-time setup code to its log when it starts, a line like
+   `no owner account yet: open /setup and enter the setup code ...`. Enter that code, a user name and a password
+   (10 characters or more, twice). The code stops anyone else who reaches the page first from making the account,
+   and it works once: if the owner file is ever deleted, the next visit to **Set up** writes a new code to the log.
+3. After that, **Sign in to edit** goes to **Sign in**. A session lasts 30 days. **Sign out** (`/signout`) signs out
+   on every device.
+
+How it is protected:
+
+- The password is stored as an scrypt hash in `owner.json` next to `app.py` (mode 600, git-ignored), never in plain
+  text.
+- 5 wrong passwords or setup codes from one address within 15 minutes lock that address out for the rest of the 15
+  minutes (`429`). Attempts sent at once are counted before they are checked, IPv6 addresses count by their `/64`
+  network, and after 100 failures from everywhere within 15 minutes each address gets one try and each network
+  three (IPv4 by `/24`, IPv6 by `/48`). A right password from a locked address is refused too.
+- During such an attack one wrong password from a neighbour on the same provider network does not keep your new
+  browser out: that takes three wrong passwords within 15 minutes from three of their addresses (IPv4) or three of
+  their home lines (IPv6, where a line's whole `/56` counts as one address).
+- A browser that has signed in before keeps a signed device cookie and has its own 5 tries, so a stranger who locks
+  out your address (or the address of the proxy in front) cannot lock you out of that browser. During an attack from
+  many networks that browser is the way in. Making a new owner account ends every device cookie of the old one.
+- The session cookie is `HttpOnly`, `SameSite=Lax` and signed with the app's secret key (`SECRET_KEY`, or
+  `secret_key` next to `app.py`, made on first start, mode 600). It is `Secure` everywhere except plain `http` on
+  `localhost`, `127.0.0.1` or `[::1]` (`SECURE_COOKIES=auto`). On a plain `http` address on your home network the
+  browser drops a `Secure` cookie and the sign-in page says so: use https, or set `SECURE_COOKIES=false` there.
+- Forget the password? Stop the app, delete `owner.json` next to `app.py`, start it again and set up a new owner
+  with the new setup code from the log. Services, credentials and results stay.
+
+Behind a reverse proxy for https, with the own sign-in still on: list the proxy's address in `TRUSTED_PROXIES` so
+the lockout counts each visitor's address from `X-Forwarded-For` instead of the proxy's (the header is read only from
+those addresses), and put the public host name in `ALLOWED_HOSTS`. By default the own sign-in answers only on
+`localhost`, `127.0.0.1`, `[::1]`, IP addresses and this machine's own name; any other `Host` gets `421`, so a web
+page cannot reach a copy on your machine by DNS rebinding.
+
+Other ways to sign in:
+
+- `WEB_USERNAME` and `WEB_PASSWORD` set: HTTP Basic Auth with those two values instead (no setup page, no lockout).
+  **Sign in to edit** asks the browser for them.
+- `ALLOW_INSECURE=true`: the app has no sign-in at all and leaves it to a reverse proxy in front that signs people
+  in; everyone who reaches it can run checks and edit. Never set it on an address other people can reach directly.
+  The host name check above stays on in this mode, so put the name the proxy uses in `ALLOWED_HOSTS`; a web page
+  that rebinds its own name to your machine still gets `421`.
 
 ### Running it for real
 
@@ -63,9 +114,9 @@ The status rows are public, but the edit panels (which show each service's URL a
 gunicorn --workers 1 --threads 8 --bind 127.0.0.1:5002 'app:create_app()'
 ```
 
-Keep `--workers 1`: the run-progress state and the daily schedule live in memory, so extra workers would run the checks several times. Put it behind an HTTPS reverse proxy (Caddy, nginx) and set `SESSION_COOKIE_SECURE=true`; Basic auth over plain HTTP sends the password in the clear.
+Keep `--workers 1`: the run-progress state and the daily schedule live in memory, so extra workers would run the checks several times. Put it behind an HTTPS reverse proxy (Caddy, nginx) and set `SESSION_COOKIE_SECURE=true`; any sign-in over plain HTTP sends the password in the clear.
 
-Set `SECRET_KEY` to any long random string as well (for example `python -c "import secrets; print(secrets.token_hex(32))"`). Without it a fresh key is generated on every start, which invalidates open sessions and their CSRF tokens whenever the app restarts.
+Set `SECRET_KEY` to any long random string as well (for example `python -c "import secrets; print(secrets.token_hex(32))"`). Without it a fresh Flask key is generated on every start, which invalidates open CSRF tokens whenever the app restarts, and the own sign-in keeps its key in `secret_key` next to `app.py`. With the own sign-in a `SECRET_KEY` shorter than 32 bytes stops the app at start-up.
 
 `DAILY_RUN_AT` (default in `.env.example`: `05:30,17:30`) runs every check automatically at each listed time, every day, in `SCHEDULE_TIMEZONE` (default `Europe/London`). Give one time (`05:30`) for once a day, or several separated by commas. Leave it empty to only run checks by hand.
 

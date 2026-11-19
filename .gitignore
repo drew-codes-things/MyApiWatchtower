@@ -15,3 +15,5 @@ credentials.json.tmp
 services.json
 services.json.tmp
 plugins/
+owner.json
+secret_key
