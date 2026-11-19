@@ -103,6 +103,8 @@ Other ways to sign in:
   **Sign in to edit** asks the browser for them.
 - `ALLOW_INSECURE=true`: the app has no sign-in at all and leaves it to a reverse proxy in front that signs people
   in; everyone who reaches it can run checks and edit. Never set it on an address other people can reach directly.
+  The host name check above stays on in this mode, so put the name the proxy uses in `ALLOWED_HOSTS`; a web page
+  that rebinds its own name to your machine still gets `421`.
 
 ### Running it for real
 

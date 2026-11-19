@@ -41,8 +41,8 @@ OWNER_FILE_NAME = "owner.json"
 SECRET_FILE_NAME = "secret_key"
 SECRET_BYTES = 32
 MISDIRECTED_REQUEST = 421
-WRONG_HOST_TEXT = ("MyApiWatchtower does not answer on that host name: the own sign-in answers on the names in "
-                   "ALLOWED_HOSTS, or with it empty on localhost, IP addresses and this machine's name.")
+WRONG_HOST_TEXT = ("MyApiWatchtower does not answer on that host name: it answers on the names in ALLOWED_HOSTS, "
+                   "or with it empty on localhost, IP addresses and this machine's name.")
 DAILY_RUN_AT = (os.getenv("DAILY_RUN_AT") or "").strip()
 SCHEDULE_TIMEZONE = ZoneInfo((os.getenv("SCHEDULE_TIMEZONE") or "Europe/London").strip())
 
@@ -151,7 +151,7 @@ def hide_sign_in_pages_unless_used():
 
 @app.before_request
 def refuse_foreign_host_names():
-    if sign_in_method() == "builtin" and not OWN_SIGN_IN.accepts_host(request.host):
+    if sign_in_method() != "basic" and not OWN_SIGN_IN.accepts_host(request.host):
         return Response(WRONG_HOST_TEXT, status=MISDIRECTED_REQUEST, mimetype="text/plain")
     return None
 

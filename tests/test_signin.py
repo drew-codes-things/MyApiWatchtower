@@ -1,6 +1,7 @@
 import base64
 import ipaddress
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -24,6 +25,7 @@ OWNER_NAME = "owner"
 PASSWORD = "correct horse battery"
 HEADER = "X-Forwarded-User"
 SERVICE = {"name": "Status API", "url": "https://status.example.test/health"}
+CSRF_FIELD = re.compile(r'name="csrf_token" value="([^"]+)"')
 BASIC = {"Authorization": "Basic " + base64.b64encode(b"basic-user:a long basic password").decode()}
 
 
@@ -274,9 +276,27 @@ def test_a_rebinding_host_name_gets_421(web):
     assert sign_in(attacker).status_code == 303
 
 
-def test_the_proxy_and_basic_modes_answer_on_any_host_name(web, monkeypatch):
+def test_the_proxy_mode_keeps_the_host_check_so_a_rebinding_page_cannot_edit(web, monkeypatch):
     monkeypatch.setattr(watchtower, "ALLOW_INSECURE", True)
+    assert web.get("/", base_url="http://127.0.0.1:5002").status_code == 200
+    assert web.get("/", base_url="http://localhost:5002").status_code == 200
+    rebound = "http://evil.example:5002"
+    page = web.get("/", base_url=rebound)
+    assert page.status_code == 421
+    handed_out = CSRF_FIELD.search(page.get_data(as_text=True))
+    added = web.post("/services", data={**SERVICE, "csrf_token": handed_out.group(1) if handed_out else ""}, base_url=rebound)
+    assert added.status_code == 421
+    assert services_store.load_services() == []
+
+
+def test_the_proxy_mode_answers_on_the_allowed_host_names(web, monkeypatch):
+    monkeypatch.setattr(watchtower, "ALLOW_INSECURE", True)
+    monkeypatch.setattr(watchtower.OWN_SIGN_IN, "allowed_hosts", frozenset({"watch.example.com"}))
     assert web.get("/", base_url="http://watch.example.com").status_code == 200
+    assert web.get("/", base_url="http://evil.example").status_code == 421
+
+
+def test_the_basic_mode_answers_on_any_host_name(web, monkeypatch):
     monkeypatch.setattr(watchtower, "WEB_USERNAME", "basic-user")
     monkeypatch.setattr(watchtower, "WEB_PASSWORD", "a long basic password")
     assert web.get("/", base_url="http://watch.example.com").status_code == 200
